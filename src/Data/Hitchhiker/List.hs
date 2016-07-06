@@ -1,14 +1,8 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, FlexibleInstances,
+             GADTs, KindSignatures, ScopedTypeVariables, StandaloneDeriving,
+             TypeFamilies, TypeOperators, UndecidableInstances #-}
+
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
-
-
-{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleInstances, GADTs, KindSignatures,
-             StandaloneDeriving, TypeFamilies, TypeOperators,
-             UndecidableInstances #-}
-
---
-
-{-# LANGUAGE ScopedTypeVariables #-}
 
 {- |
    Module      : Data.Hitchhiker.List
@@ -22,15 +16,18 @@
  -}
 module Data.Hitchhiker.List where
 
+import Prelude hiding (drop, splitAt, take)
+
 import Data.Singletons
 import Data.Singletons.Prelude
 import Data.Singletons.Prelude.Enum
-import Data.Singletons.Prelude.Ord
 import Data.Singletons.TypeLits
 import Data.Type.Equality
-import GHC.Exts                     (IsList (..))
 import GHC.TypeLits
 
+import Control.Arrow                   (first)
+import Data.List                       (unfoldr)
+import GHC.Exts                        (IsList (..))
 import Text.ParserCombinators.ReadPrec (prec, (<++))
 import Text.Read                       (Lexeme (Ident, Symbol), Read (..), lexP,
                                         parens, readListPrecDefault, readPrec)
@@ -63,8 +60,41 @@ instance (Read a, Read (List (n-1) a)) => Read (List n a) where
 
   readListPrec = readListPrecDefault
 
-someList :: (KnownNat (n -1)) => List (n - 1) a -> SomeList a
-someList l = SomeList SNat l
+take :: forall n r a. (KnownNat n) => List (n + r) a -> List n a
+take = go sing
+  where
+    go :: SNat n' -> List (n' + r) a -> List n' a
+    go n' as = case (testEquality n' zero, as) of
+                 (Just Refl, _)           -> Nil
+                 (_,         ~(a :| as')) -> a :| go (sPred n') as'
+
+drop :: forall n r a. (KnownNat r) => List (r + n) a -> List n a
+drop = go sing
+  where
+    go :: SNat r' -> List (r' + n) a -> List n a
+    go r' as = case (testEquality r' zero, as) of
+                 (Just Refl, _)           -> as
+                 (_,         ~(_ :| as')) -> go (sPred r') as'
+
+splitAt :: forall n l r a. (KnownNat l, (l + r) ~ n) => List n a -> (List l a, List r a)
+splitAt = go sing
+  where
+    go :: forall l' n'. ((l' + r) ~ n') => SNat l' -> List n' a -> (List l' a, List r a)
+    go l' as = case (testEquality l' zero, as) of
+                 (Just Refl, _)           -> (Nil, as)
+                 -- We know that this must be a :| since n, l, r >= 0
+                 (_,         ~(a :| as')) -> first (a:|) (go (sPred l') as')
+
+zero :: SNat 0
+zero = SNat
+
+uncons :: List (n + 1) a -> (a, List n a)
+uncons (a :| as) = (a, as)
+
+--------------------------------------------------------------------------------
+
+someList :: (KnownNat n) => List n a -> SomeList a
+someList = SomeList SNat
 
 data SomeList :: * -> * where
   SomeList :: forall n a. (KnownNat n) => SNat n -> List n a -> SomeList a
@@ -72,22 +102,16 @@ data SomeList :: * -> * where
 instance (Eq a) => Eq (SomeList a) where
   (SomeList nl ll) == (SomeList nr lr)
     = case testEquality nl nr of
-        Just Refl -> withKnownNat nl (withKnownNat nr (ll `checkEq` lr))
+        Just Refl -> withKnownNat nl (withKnownNat nr (ll == lr))
         Nothing   -> False
-    where
-      checkEq :: List n a -> List n a -> Bool
-      checkEq = (==)
 
 -- | Compares on lengths before comparing on values.
 instance (Ord a) => Ord (SomeList a) where
   compare (SomeList nl ll) (SomeList nr lr) =
     case (fromSing (sCompare nl nr), testEquality nl nr) of
       -- Malformed instances may end up having this return (EQ, Nothing)...
-      (EQ, Just Refl) -> (checkComp ll lr)
+      (EQ, Just Refl) -> compare ll lr
       (ne,_)          -> ne
-    where
-      checkComp :: List n a -> List n a -> Ordering
-      checkComp = compare
 
 instance (Show a) => Show (SomeList a) where
   showsPrec d (SomeList _ l) = showsPrec d l
@@ -96,23 +120,25 @@ instance (Read a) => Read (SomeList a) where
   readPrec = (do Ident "Nil" <- lexP
                  return (SomeList SNat Nil))
              <++
-             (do a <- readPrec
-                 Symbol ":|" <- lexP
-                 as <- readPrec
-                 case as of
-                   SomeList n as' -> return (prepend n a as'))
-    where
-      prepend :: (KnownNat (l + 1)) => SNat (l) -> a -> List (l) a -> SomeList a
-      prepend l a as = SomeList (sSucc l) (a :| as)
+             (parens . prec 10 $ do a <- readPrec
+                                    Symbol ":|" <- lexP
+                                    as <- readPrec
+                                    return (scons a as))
 
--- simplify :: (KnownNat l) => SNat ((l + 1) - 1) :~: SNat l
--- simplify = Refl
+scons :: a -> SomeList a -> SomeList a
+scons a sl = case sl of
+               SomeList n as -> let m = sSucc n
+                                in withKnownNat n (withKnownNat m (SomeList m (a :| as)))
 
--- blah :: (KnownNat l) => SNat ((l - 1) + 1) :~: SNat ((l + 1) - 1)
--- blah = Refl
+unscons :: SomeList a -> Maybe (a, SomeList a)
+unscons (SomeList n as) = case as of
+                            Nil      -> Nothing
+                            a :| as' -> let m = sPred n
+                                        in withKnownNat m (Just (a, SomeList m as'))
 
-cons :: SNat l -> a -> List (l) a -> List (l + 1) a
-cons n a as = (a :| (withKnownNat (sPred (sSucc n)) as))
+instance IsList (SomeList a) where
+  type Item (SomeList a) = a
 
-scons :: forall a. a -> SomeList a -> SomeList a
-scons a (SomeList (SNat :: SNat n) as) = SomeList SNat ((a :| as) :: List (n + 1) a)
+  fromList = foldr scons (SomeList zero Nil)
+
+  toList = unfoldr unscons
