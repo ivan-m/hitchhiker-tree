@@ -1,6 +1,6 @@
 {-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, FlexibleInstances,
-             GADTs, KindSignatures, ScopedTypeVariables, StandaloneDeriving,
-             TypeFamilies, TypeOperators, UndecidableInstances #-}
+             GADTs, ScopedTypeVariables, StandaloneDeriving, TypeFamilies,
+             TypeOperators, UndecidableInstances #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
