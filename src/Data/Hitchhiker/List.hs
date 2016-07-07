@@ -26,6 +26,7 @@ import Data.Type.Equality
 import GHC.TypeLits
 
 import Control.Arrow                   (first)
+import Data.Bifunctor                  (bimap)
 import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
@@ -111,19 +112,21 @@ length :: forall n a. (KnownNat n) => List n a -> Integer
 length _ = natVal (Proxy :: Proxy n)
 
 -- | Merging function is @f new old@.  Comparison function assumed to
--- be O(1).  Result will have length of either @n@ or @n+1@.
-insertOrdOn :: forall n a b. (KnownNat n, Ord b) => (a -> a -> a) -> (a -> b)
-               -> a -> List n a -> SomeList a
-insertOrdOn mrg cmp v = go sing
+--   be O(1).
+insertOrdOn :: forall n a b. (Ord b) => (a -> a -> a) -> (a -> b)
+               -> a -> List n a -> Either (List n a) (List (n+1) a)
+insertOrdOn mrg cmp v = go
   where
-    go :: (KnownNat n') => SNat n' -> List n' a -> SomeList a
-    go n as = case as of
-                Nil -> SomeList SNat (v :| Nil)
-                a :| as' -> case (compare `on` cmp) v a of
-                              LT -> v `scons` someList as
-                              EQ -> someList ((mrg v a) :| as')
-                              GT -> let n' = sPred n
-                                    in withKnownNat n' (a `scons` go n' as')
+    go :: List n' a -> Either (List n' a) (List (n'+1) a)
+    go as = case as of
+              Nil      -> Right (v :| Nil)
+              a :| as' -> case (compare `on` cmp) v a of
+                            LT -> Right (v :| as)
+                            EQ -> Left (mrg v a :| as')
+                            GT -> a `eCons` go as'
+
+    eCons :: forall n'. a -> Either (List (n'-1) a) (List n' a) -> Either (List n' a) (List (n'+1) a)
+    eCons a = bimap (a:|) (a:|)
 
 --------------------------------------------------------------------------------
 

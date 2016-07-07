@@ -25,7 +25,7 @@ import GHC.TypeLits
 
 data HTree l b k a where
   Partial :: forall c     l b k a. (1 <= c, c <= (b:-1))
-              => Leaves c k a -> HTree l b k a
+             => Leaves c k a -> HTree l b k a
 
   Full    :: forall c e t l b k a. (2 <= c, c <= b, e <= b)
              => NodeLog e k a -> Children c t l b k a -> HTree l b k a
