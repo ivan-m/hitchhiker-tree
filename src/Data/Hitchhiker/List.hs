@@ -16,7 +16,7 @@
  -}
 module Data.Hitchhiker.List where
 
-import Prelude hiding (drop, splitAt, take)
+import Prelude hiding (concat, drop, length, splitAt, take, (++))
 
 import Data.Singletons
 import Data.Singletons.Prelude
@@ -26,6 +26,7 @@ import Data.Type.Equality
 import GHC.TypeLits
 
 import Control.Arrow                   (first)
+import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
 import Text.ParserCombinators.ReadPrec (prec, (<++))
@@ -91,13 +92,49 @@ zero = SNat
 uncons :: List (n + 1) a -> (a, List n a)
 uncons (a :| as) = (a, as)
 
+uncons' :: List n a -> Maybe (a, List (n-1) a)
+uncons' as = case as of
+                Nil      -> Nothing
+                a :| as' -> Just (a, as')
+
+(++) :: forall n m a. List n a -> List m a -> List (n + m) a
+ll ++ lr = go ll
+  where
+    go :: List n' a -> List (n' + m) a
+    go ll' = case ll' of
+               Nil     -> lr
+               a :| as -> a :| go as
+
+infixr 5 ++
+
+length :: forall n a. (KnownNat n) => List n a -> Integer
+length _ = natVal (Proxy :: Proxy n)
+
+-- | Merging function is @f new old@.  Comparison function assumed to
+-- be O(1).  Result will have length of either @n@ or @n+1@.
+insertOrdOn :: forall n a b. (KnownNat n, Ord b) => (a -> a -> a) -> (a -> b)
+               -> a -> List n a -> SomeList a
+insertOrdOn mrg cmp v = go sing
+  where
+    go :: (KnownNat n') => SNat n' -> List n' a -> SomeList a
+    go n as = case as of
+                Nil -> SomeList SNat (v :| Nil)
+                a :| as' -> case (compare `on` cmp) v a of
+                              LT -> v `scons` someList as
+                              EQ -> someList ((mrg v a) :| as')
+                              GT -> let n' = sPred n
+                                    in withKnownNat n' (a `scons` go n' as')
+
 --------------------------------------------------------------------------------
+
+data SomeList :: * -> * where
+  SomeList :: forall n a. (KnownNat n) => SNat n -> List n a -> SomeList a
 
 someList :: (KnownNat n) => List n a -> SomeList a
 someList = SomeList SNat
 
-data SomeList :: * -> * where
-  SomeList :: forall n a. (KnownNat n) => SNat n -> List n a -> SomeList a
+nilList :: SomeList a
+nilList = SomeList zero Nil
 
 instance (Eq a) => Eq (SomeList a) where
   (SomeList nl ll) == (SomeList nr lr)
@@ -118,12 +155,19 @@ instance (Show a) => Show (SomeList a) where
 
 instance (Read a) => Read (SomeList a) where
   readPrec = (do Ident "Nil" <- lexP
-                 return (SomeList SNat Nil))
+                 return nilList)
              <++
              (parens . prec 10 $ do a <- readPrec
                                     Symbol ":|" <- lexP
                                     as <- readPrec
                                     return (scons a as))
+
+instance Monoid (SomeList a) where
+  mempty = nilList
+
+  mappend = append
+
+  mconcat = concat
 
 scons :: a -> SomeList a -> SomeList a
 scons a sl = case sl of
@@ -139,6 +183,17 @@ unscons (SomeList n as) = case as of
 instance IsList (SomeList a) where
   type Item (SomeList a) = a
 
-  fromList = foldr scons (SomeList zero Nil)
+  fromList = foldr scons nilList
 
   toList = unfoldr unscons
+
+append :: SomeList a -> SomeList a -> SomeList a
+append (SomeList nl ll) (SomeList nr lr)
+  = let n = nl %:+ nr
+    in withKnownNat n (SomeList n (ll ++ lr))
+
+concat :: [SomeList a] -> SomeList a
+concat = foldr append nilList
+
+slength :: SomeList a -> Integer
+slength (SomeList n _) = natVal n
