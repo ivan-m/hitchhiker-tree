@@ -15,7 +15,7 @@
  -}
 module Data.Hitchhiker.List where
 
-import Prelude hiding (concat, drop, length, splitAt, take, (++))
+import Prelude hiding (concat, drop, length, splitAt, take, zip, zipWith, (++))
 
 import Data.Singletons
 import Data.Singletons.Prelude
@@ -24,8 +24,8 @@ import Data.Singletons.TypeLits
 import Data.Type.Equality
 import GHC.TypeLits
 
-import Control.Arrow                   (first)
-import Data.Bifunctor                  (bimap)
+import Control.Applicative             (liftA2)
+import Data.Bifunctor                  (bimap, first)
 import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
@@ -61,6 +61,12 @@ instance (Read a, KnownNat n) => Read (List n a) where
 
   readListPrec = readListPrecDefault
 
+fromDependent :: forall n a. List n a -> [a]
+fromDependent = go
+  where
+    go :: List n' a -> [a]
+    go Nil = []
+    go (a :| as) = a : go as
 
 take :: forall n r a. (KnownNat n) => List (n + r) a -> List n a
 take = go sing
@@ -111,6 +117,51 @@ infixr 5 ++
 length :: forall n a. (KnownNat n) => List n a -> Integer
 length _ = natVal (Proxy :: Proxy n)
 
+zipWith :: forall n a b c. (a -> b -> c) -> List n a -> List n b -> List n c
+zipWith f = go
+  where
+    go :: List n' a -> List n' b -> List n' c
+    go as bs = case (as, bs) of
+                 (Nil,       Nil)      -> Nil
+                 ~(a :| as', b :| bs') -> f a b :| go as' bs'
+
+zip :: List n a -> List n b -> List n (a,b)
+zip = zipWith (,)
+
+unzip :: forall n a b c. List n (a,b) -> (List n a, List n b)
+unzip = go
+  where
+    go :: List n' (a,b) -> (List n' a, List n' b)
+    go lab = case lab of
+               Nil             -> (Nil, Nil)
+               ((a,b) :| lab') -> bimap (a:|) (b:|) (go lab')
+
+reverse :: forall n a. List n a -> List n a
+reverse = go zero Nil
+  where
+    -- Without the SNat, we get "*** Exception: Prelude.foldr1: empty list" from ghc.
+    go :: ((c + r) ~ n) => SNat c -> List c a -> List r a -> List n a
+    go c lc lr = case lr of
+                   Nil        -> lc
+                   (a :| lr') -> go (sSucc c) (a :| lc) lr'
+
+ordBuckets :: forall n k a. (Ord k) => List n (k,a) -> List n (k -> Bool)
+ordBuckets lst = case lst of
+                   Nil        -> Nil
+                   (_ :| kas) -> go Nothing kas
+  where
+    go :: Maybe k -> List n' (k,a) -> List (n' + 1) (k -> Bool)
+    go mk kas = case kas of
+                  Nil             -> lowB mk :| Nil
+                                     -- ^ This is either the only
+                                     -- child - in which case case
+                                     -- always insert here - or the
+                                     -- last one, so no upper bound to
+                                     -- worry about.
+                  ((k,_) :| kas') -> liftA2 (&&) (lowB mk) (<k) :| go (Just k) kas'
+
+    lowB = maybe (const True) (>=)
+
 -- | Merging function is @f new old@.  Key-getting function assumed to
 --   be O(1).
 insertOrdOn :: forall n a k. (Ord k) => (a -> a -> a) -> (a -> k)
@@ -127,6 +178,22 @@ insertOrdOn mrg cmp v = go
 
     eCons :: forall n'. a -> Either (List (n'-1) a) (List n' a) -> Either (List n' a) (List (n'+1) a)
     eCons a = bimap (a:|) (a:|)
+
+-- | TODO: is it worth trying to do a binary search?
+lookupOrd :: forall n a k. (Ord k) => k -> List n (k,a) -> Maybe a
+lookupOrd v = go
+  where
+    go :: List n' (k,a) -> Maybe a
+    go kas = case kas of
+               Nil           -> Nothing
+               (k,a) :| kas' -> case compare v k of
+                                  LT -> go kas'
+                                  EQ -> Just a
+                                  GT -> Nothing
+
+-- | For a given key @k@ and indexed list, finds the first @a_i@ where
+--   @k_i <= k < k_{i+1}@ (or @k_0@ if @k < k_0@).
+-- ordRegion :: k ->
 
 --------------------------------------------------------------------------------
 
