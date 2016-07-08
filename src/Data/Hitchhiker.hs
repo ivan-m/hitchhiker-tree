@@ -24,9 +24,13 @@ import GHC.TypeLits
 --------------------------------------------------------------------------------
 
 data HTree l b k a where
+  Empty   :: HTree l b k a
+
+  -- | Partial root node, acting like a leaf.
   Partial :: forall c     l b k a. (1 <= c, c <= 2:*b)
              => Leaves c k a -> HTree l b k a
 
+  -- | Full root node, acting like an internal node.
   Full    :: forall c e d l b k a. (2 <= c, c <= (2:*b), e <= l)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
