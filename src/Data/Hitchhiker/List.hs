@@ -1,6 +1,5 @@
-{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, FlexibleInstances,
-             GADTs, ScopedTypeVariables, StandaloneDeriving, TypeFamilies,
-             TypeOperators, UndecidableInstances #-}
+{-# LANGUAGE DataKinds, DeriveFunctor, GADTs, ScopedTypeVariables,
+             StandaloneDeriving, TypeFamilies, TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
@@ -30,7 +29,7 @@ import Data.Bifunctor                  (bimap)
 import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
-import Text.ParserCombinators.ReadPrec (prec, (<++))
+import Text.ParserCombinators.ReadPrec (ReadPrec, prec, (<++))
 import Text.Read                       (Lexeme (Ident, Symbol), Read (..), lexP,
                                         parens, readListPrecDefault, readPrec)
 
@@ -47,20 +46,21 @@ deriving instance (Ord a) => Ord (List n a)
 deriving instance (Show a) => Show (List n a)
 deriving instance Functor (List n)
 
-instance {-# OVERLAPPING #-} Read (List 0 a) where
-  readPrec = do Ident "Nil" <- lexP
-                return Nil
+instance (Read a, KnownNat n) => Read (List n a) where
+  readPrec = go sing
+    where
+      go :: forall n'. SNat n' -> ReadPrec (List n' a)
+      go n = case testEquality n zero of
+               Just Refl -> do Ident "Nil" <- lexP
+                               return Nil
+               _         -> parens . prec 10
+                            $ do a <- readPrec
+                                 Symbol ":|" <- lexP
+                                 as <- go (sPred n)
+                                 return (a :| as)
 
   readListPrec = readListPrecDefault
 
-instance (Read a, Read (List (n-1) a)) => Read (List n a) where
-  readPrec = parens . prec 10
-             $ do a <- readPrec
-                  Symbol ":|" <- lexP
-                  as <- readPrec
-                  return (a :| as)
-
-  readListPrec = readListPrecDefault
 
 take :: forall n r a. (KnownNat n) => List (n + r) a -> List n a
 take = go sing
