@@ -1,6 +1,6 @@
 {-# LANGUAGE ConstraintKinds, DataKinds, FlexibleContexts, GADTs,
              KindSignatures, MultiParamTypeClasses, ScopedTypeVariables,
-             TypeOperators #-}
+             StandaloneDeriving, TypeOperators #-}
 
 {- |
    Module      : Data.Hitchhiker
@@ -34,6 +34,8 @@ data HTree l b k a where
   Full    :: forall c e d l b k a. (2 <= c, c <= (2:*b), e <= l)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
+deriving instance (Show k, Show a) => Show (HTree l b k a)
+
 data Statement k a = Assert k a
                    | Retract k
   deriving (Eq, Ord, Show, Read)
@@ -57,4 +59,6 @@ data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
            => NodeLog e k a             -- ^ Internal log
            -> Children c (d:-1) l b k a -- ^ Sub-nodes with minimum key
            -> HNode d l b k a
+
+deriving instance (Show k, Show a) => Show (HNode d l b k a)
 
