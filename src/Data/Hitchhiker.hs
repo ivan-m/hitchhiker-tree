@@ -27,8 +27,8 @@ data HTree l b k a where
   Partial :: forall c     l b k a. (1 <= c, c <= (b:-1))
              => Leaves c k a -> HTree l b k a
 
-  Full    :: forall c e t l b k a. (2 <= c, c <= b, e <= l)
-             => NodeLog e k a -> Children c t l b k a -> HTree l b k a
+  Full    :: forall c e d l b k a. (2 <= c, c <= b, e <= l)
+             => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
 data Statement k a = Assert k a
                    | Retract k
@@ -43,16 +43,16 @@ type NodeLog l k a = List l (Statement k a)
 
 data NType = Internal | Leaf
 
--- | A node of type @t@ containing at most @l@ internal logs per node,
+-- | A node of depth @d@ containing at most @l@ internal logs per node,
 --   branch factor @b@, keys @k@ and values @a@.
-data HNode (t :: NType) (l :: Nat) (b :: Nat) k a where
+data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
   HLeaf :: forall c      l b k a. (LeafC b c)
-           => Leaves c k a -> HNode 'Leaf l b k a
+           => Leaves c k a -> HNode 0 l b k a
 
-  HInt  :: forall c e t' l b k a. (IntC b c, e <= l)
+  HInt  :: forall c e d l b k a. (IntC b c, e <= l)
            => NodeLog e k a            -- ^ Internal log
-           -> Children c t' l b k a    -- ^ Sub-nodes with minimum key
-           -> HNode 'Internal l b k a
+           -> Children c d l b k a     -- ^ Sub-nodes with minimum key
+           -> HNode (d+1) l b k a
 
 type LeafC b c = (b <= (2:*c + 2), c <= (b :- 1))
 type IntC  b c = (b <= (2:*c), c <= b)
