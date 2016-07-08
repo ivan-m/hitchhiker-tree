@@ -17,7 +17,7 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:     Data.Hitchhiker
-  other-modules:       Data.Hitchhiker.List
+  other-modules:       Data.List.Dependent
   -- other-extensions:
   build-depends:       base >=4.9 && <4.10
                      , ghc-typelits-natnormalise

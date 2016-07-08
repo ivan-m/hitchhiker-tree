@@ -14,7 +14,7 @@
  -}
 module Data.Hitchhiker where
 
-import Data.Hitchhiker.List
+import Data.List.Dependent
 
 import Data.Proxy
 import Data.Singletons.Prelude.Num
@@ -61,4 +61,3 @@ data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
            -> HNode d l b k a
 
 deriving instance (Show k, Show a) => Show (HNode d l b k a)
-

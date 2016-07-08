@@ -3,8 +3,9 @@
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
+
 {- |
-   Module      : Data.Hitchhiker.List
+   Module      : Data.List.Dependent
    Description : Dependently-typed lists
    Copyright   : (c) Ivan Lazar Miljenovic
    License     : MIT
@@ -13,7 +14,7 @@
 
 
  -}
-module Data.Hitchhiker.List where
+module Data.List.Dependent where
 
 import Prelude hiding (concat, drop, length, splitAt, take, zip, zipWith, (++))
 
@@ -128,7 +129,7 @@ zipWith f = go
 zip :: List n a -> List n b -> List n (a,b)
 zip = zipWith (,)
 
-unzip :: forall n a b c. List n (a,b) -> (List n a, List n b)
+unzip :: forall n a b. List n (a,b) -> (List n a, List n b)
 unzip = go
   where
     go :: List n' (a,b) -> (List n' a, List n' b)
