@@ -1,5 +1,7 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds, DeriveFunctor, GADTs, ScopedTypeVariables,
              StandaloneDeriving, TypeFamilies, TypeOperators #-}
+{-# LANGUAGE FlexibleContexts #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
@@ -11,16 +13,18 @@
    License     : MIT
    Maintainer  : Ivan.Miljenovic@gmail.com
 
-
+  A copy of the standard list data structure + associated functions
+  where the length is statically known.
 
  -}
 module Data.List.Dependent where
 
-import Prelude hiding (concat, drop, length, splitAt, take, zip, zipWith, (++))
+import Prelude hiding (concat, drop, length, splitAt, take, zip, zipWith, (++), replicate)
 
 import Data.Singletons
 import Data.Singletons.Prelude
 import Data.Singletons.Prelude.Enum
+import Data.Singletons.Prelude.Num
 import Data.Singletons.TypeLits
 import Data.Type.Equality
 import GHC.TypeLits
@@ -69,6 +73,121 @@ fromDependent = go
     go Nil = []
     go (a :| as) = a : go as
 
+--------------------------------------------------------------------------------
+-- Defining functions in the order of Data.List
+
+---------------------
+-- Basic functions --
+---------------------
+
+(++) :: forall n m a. List n a -> List m a -> List (n + m) a
+ll ++ lr = go ll
+  where
+    go :: List n' a -> List (n' + m) a
+    go ll' = case ll' of
+               Nil     -> lr
+               a :| as -> a :| go as
+
+infixr 5 ++
+
+head :: List (n+1) a -> a
+head (a :| _) = a
+
+last :: forall n a. (KnownNat n) => List (n+1) a -> a
+last = go sing
+  where
+    go :: SNat n' -> List (n'+1) a -> a
+    go n1 as = case as of
+                 (a :| Nil) -> a
+                 (_ :| as') -> go (sPred n1) as'
+
+tail :: List (n+1) a -> List n a
+tail (_ :| as) = as
+
+init :: forall n a. (KnownNat n) => List (n+1) a -> List n a
+init = go sing
+  where
+    go :: SNat n' -> List (n'+1) a -> List n' a
+    go n1 as = case as of
+                 (_ :| Nil) -> Nil
+                 (a :| as') -> a :| go (sPred n1) as'
+
+uncons :: List n a -> Maybe (a, List (n-1) a)
+uncons as = case as of
+               Nil      -> Nothing
+               a :| as' -> Just (a, as')
+
+-- Not sure why anyone would want to use this...
+null :: List n a -> Bool
+null Nil = True
+null _   = False
+
+-- O(1) !!!
+length :: forall n a. (KnownNat n) => List n a -> Integer
+length _ = natVal (Proxy :: Proxy n)
+
+--------------------------
+-- List transformations --
+--------------------------
+
+map :: (a -> b) -> List n a -> List n b
+map = fmap
+
+reverse :: forall n a. List n a -> List n a
+reverse = go zero Nil
+  where
+    -- Without the SNat, we get "*** Exception: Prelude.foldr1: empty list" from ghc.
+    go :: ((c + r) ~ n) => SNat c -> List c a -> List r a -> List n a
+    go c lc lr = case lr of
+                   Nil        -> lc
+                   (a :| lr') -> go (sSucc c) (a :| lc) lr'
+
+-- Note: doesn't handle the empty case
+intersperse :: forall n a. a -> List (1+n) a -> List (1 + 2*n) a
+intersperse e (a0 :| as0) = a0 :| go as0
+  where
+    go :: List n' a -> List (2*n') a
+    go as = case as of
+              Nil        -> Nil
+              (a :| as') -> e :| a :| go as'
+
+-- TODO: intercalate
+
+transpose :: forall r c a. (KnownNat c) => List r (List c a) -> List c (List r a)
+transpose = go sing
+  where
+    go :: SNat c' -> List r (List c' a) -> List c' (List r a)
+    go c' rs = case testEquality c' zero of
+                 Just Refl -> Nil
+                 _         -> let (c, rs') = nextC rs
+                              in c :| go (sPred c') rs'
+
+    uncons' :: List (1+n) b -> (b, List n b)
+    uncons' (b:|bs) = (b, bs)
+
+    nextC = unzipWith uncons'
+
+subsequences :: forall n a. List n a -> List (2^n) (SomeList a)
+subsequences = go
+  where
+    go :: List n' a -> List (2^n') (SomeList a)
+    go as = case as of
+              Nil -> nilList :| Nil
+              a :| as' -> let ss = go as'
+                          in doubleLength ss (fmap (scons a) ss)
+
+    -- Needed to convince the type-checker that (2^(n'-1) + 2^(n'-1)) ~ 2^n'
+    doubleLength :: List (2^k) b -> List (2^k) b -> List (2^(k+1)) b
+    doubleLength l1 l2 = l1 ++ l2
+
+replicate :: forall n a. (KnownNat n) => a -> List n a
+replicate a = go sing
+  where
+    go :: SNat n' -> List n' a
+    go n = case testEquality n zero of
+             Just Refl -> Nil
+             _         -> a :| go (sPred n)
+
 take :: forall n r a. (KnownNat n) => List (n + r) a -> List n a
 take = go sing
   where
@@ -97,27 +216,6 @@ splitAt = go sing
 zero :: SNat 0
 zero = SNat
 
-uncons :: List (n + 1) a -> (a, List n a)
-uncons (a :| as) = (a, as)
-
-uncons' :: List n a -> Maybe (a, List (n-1) a)
-uncons' as = case as of
-                Nil      -> Nothing
-                a :| as' -> Just (a, as')
-
-(++) :: forall n m a. List n a -> List m a -> List (n + m) a
-ll ++ lr = go ll
-  where
-    go :: List n' a -> List (n' + m) a
-    go ll' = case ll' of
-               Nil     -> lr
-               a :| as -> a :| go as
-
-infixr 5 ++
-
-length :: forall n a. (KnownNat n) => List n a -> Integer
-length _ = natVal (Proxy :: Proxy n)
-
 zipWith :: forall n a b c. (a -> b -> c) -> List n a -> List n b -> List n c
 zipWith f = go
   where
@@ -129,22 +227,17 @@ zipWith f = go
 zip :: List n a -> List n b -> List n (a,b)
 zip = zipWith (,)
 
-unzip :: forall n a b. List n (a,b) -> (List n a, List n b)
-unzip = go
+unzipWith :: forall n a b c. (c -> (a,b)) -> List n c -> (List n a, List n b)
+unzipWith f = go
   where
-    go :: List n' (a,b) -> (List n' a, List n' b)
+    go :: List n' c -> (List n' a, List n' b)
     go lab = case lab of
-               Nil             -> (Nil, Nil)
-               ((a,b) :| lab') -> bimap (a:|) (b:|) (go lab')
+               Nil         -> (Nil, Nil)
+               (c :| lab') -> let (a,b) = f c
+                              in bimap (a:|) (b:|) (go lab')
 
-reverse :: forall n a. List n a -> List n a
-reverse = go zero Nil
-  where
-    -- Without the SNat, we get "*** Exception: Prelude.foldr1: empty list" from ghc.
-    go :: ((c + r) ~ n) => SNat c -> List c a -> List r a -> List n a
-    go c lc lr = case lr of
-                   Nil        -> lc
-                   (a :| lr') -> go (sSucc c) (a :| lc) lr'
+unzip :: List n (a,b) -> (List n a, List n b)
+unzip = unzipWith id
 
 ordBuckets :: forall n k a. (Ord k) => List n (k,a) -> List n (k -> Bool)
 ordBuckets lst = case lst of
