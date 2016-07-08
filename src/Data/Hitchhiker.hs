@@ -54,7 +54,7 @@ data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
            => Leaves c k a -> HNode 0 l b k a
 
   HInt  :: forall c e d l b k a. (b <= c, c <= (2:*b), e <= l)
-           => NodeLog e k a            -- ^ Internal log
-           -> Children c d l b k a     -- ^ Sub-nodes with minimum key
-           -> HNode (d+1) l b k a
+           => NodeLog e k a             -- ^ Internal log
+           -> Children c (d:-1) l b k a -- ^ Sub-nodes with minimum key
+           -> HNode d l b k a
 
