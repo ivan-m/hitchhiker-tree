@@ -111,9 +111,9 @@ infixr 5 ++
 length :: forall n a. (KnownNat n) => List n a -> Integer
 length _ = natVal (Proxy :: Proxy n)
 
--- | Merging function is @f new old@.  Comparison function assumed to
+-- | Merging function is @f new old@.  Key-getting function assumed to
 --   be O(1).
-insertOrdOn :: forall n a b. (Ord b) => (a -> a -> a) -> (a -> b)
+insertOrdOn :: forall n a k. (Ord k) => (a -> a -> a) -> (a -> k)
                -> a -> List n a -> Either (List n a) (List (n+1) a)
 insertOrdOn mrg cmp v = go
   where
