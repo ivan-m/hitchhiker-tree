@@ -1,7 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DataKinds, DeriveFunctor, GADTs, ScopedTypeVariables,
-             StandaloneDeriving, TypeFamilies, TypeOperators #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, GADTs, RankNTypes,
+             ScopedTypeVariables, StandaloneDeriving, TypeFamilies,
+             TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
@@ -16,21 +15,32 @@
   A copy of the standard list data structure + associated functions
   where the length is statically known.
 
+  TODO:
+
+  * Flesh out functions
+
+  * Document
+
+  * Determine how to specify constraints on SomeList (e.g. non-empty, <=)
+
  -}
 module Data.List.Dependent where
 
-import Prelude hiding (concat, drop, length, splitAt, take, zip, zipWith, (++), replicate)
+import           Prelude hiding (Foldable (..), break, concat, drop, iterate,
+                          length, map, replicate, span, splitAt, take, zip,
+                          zipWith, (++))
+import qualified Prelude as P
 
 import Data.Singletons
 import Data.Singletons.Prelude
 import Data.Singletons.Prelude.Enum
-import Data.Singletons.Prelude.Num
 import Data.Singletons.TypeLits
 import Data.Type.Equality
 import GHC.TypeLits
 
 import Control.Applicative             (liftA2)
-import Data.Bifunctor                  (bimap, first)
+import Data.Bifunctor                  (bimap, first, second)
+import Data.Bool
 import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
@@ -66,12 +76,75 @@ instance (Read a, KnownNat n) => Read (List n a) where
 
   readListPrec = readListPrecDefault
 
+-- | Probably not very efficient as it requires recursing down all the
+--   instances.
+instance P.Foldable (List n) where
+
+  foldMap f as = case as of
+                   Nil        -> mempty
+                   (a :| as') -> f a `mappend` P.foldMap f as'
+
 fromDependent :: forall n a. List n a -> [a]
 fromDependent = go
   where
     go :: List n' a -> [a]
     go Nil = []
     go (a :| as) = a : go as
+
+data SomeList :: * -> * where
+  SomeList :: forall n a. (KnownNat n) => SNat n -> List n a -> SomeList a
+
+someList :: (KnownNat n) => List n a -> SomeList a
+someList = SomeList SNat
+
+withSomeList :: (forall n. (KnownNat n) => List n a -> r) -> SomeList a -> r
+withSomeList f (SomeList n as) = withKnownNat n (f as)
+
+withSomeListN :: (forall n. (KnownNat n) => SNat n -> List n a -> r) -> SomeList a -> r
+withSomeListN f (SomeList n as) = withKnownNat n (f n as)
+
+nilList :: SomeList a
+nilList = SomeList zero Nil
+
+instance (Eq a) => Eq (SomeList a) where
+  (SomeList nl ll) == (SomeList nr lr)
+    = case testEquality nl nr of
+        Just Refl -> withKnownNat nl (withKnownNat nr (ll == lr))
+        Nothing   -> False
+
+-- | Compares on lengths before comparing on values.
+instance (Ord a) => Ord (SomeList a) where
+  compare (SomeList nl ll) (SomeList nr lr) =
+    case (fromSing (sCompare nl nr), testEquality nl nr) of
+      -- Malformed instances may end up having this return (EQ, Nothing)...
+      (EQ, Just Refl) -> compare ll lr
+      (ne,_)          -> ne
+
+instance (Show a) => Show (SomeList a) where
+  showsPrec d (SomeList _ l) = showsPrec d l
+
+instance (Read a) => Read (SomeList a) where
+  readPrec = (do Ident "Nil" <- lexP
+                 return nilList)
+             <++
+             (parens . prec 10 $ do a <- readPrec
+                                    Symbol ":|" <- lexP
+                                    as <- readPrec
+                                    return (scons a as))
+
+instance Monoid (SomeList a) where
+  mempty = nilList
+
+  mappend = append
+
+  mconcat = sconcat
+
+instance IsList (SomeList a) where
+  type Item (SomeList a) = a
+
+  fromList = P.foldr scons nilList
+
+  toList = unfoldr unscons
 
 --------------------------------------------------------------------------------
 -- Defining functions in the order of Data.List
@@ -89,6 +162,11 @@ ll ++ lr = go ll
                a :| as -> a :| go as
 
 infixr 5 ++
+
+append :: SomeList a -> SomeList a -> SomeList a
+append (SomeList nl ll) (SomeList nr lr)
+  = let n = nl %:+ nr
+    in withKnownNat n (SomeList n (ll ++ lr))
 
 head :: List (n+1) a -> a
 head (a :| _) = a
@@ -117,14 +195,31 @@ uncons as = case as of
                Nil      -> Nothing
                a :| as' -> Just (a, as')
 
+scons :: a -> SomeList a -> SomeList a
+scons a sl = case sl of
+               SomeList n as -> let m = sSucc n
+                                in withKnownNat n (withKnownNat m (SomeList m (a :| as)))
+
+unscons :: SomeList a -> Maybe (a, SomeList a)
+unscons (SomeList n as) = case as of
+                            Nil      -> Nothing
+                            a :| as' -> let m = sPred n
+                                        in withKnownNat m (Just (a, SomeList m as'))
+
 -- Not sure why anyone would want to use this...
 null :: List n a -> Bool
 null Nil = True
 null _   = False
 
+snull :: SomeList a -> Bool
+snull (SomeList _ as) = null as
+
 -- O(1) !!!
 length :: forall n a. (KnownNat n) => List n a -> Integer
 length _ = natVal (Proxy :: Proxy n)
+
+slength :: SomeList a -> Integer
+slength (SomeList n _) = natVal n
 
 --------------------------
 -- List transformations --
@@ -143,10 +238,10 @@ reverse = go zero Nil
                    (a :| lr') -> go (sSucc c) (a :| lc) lr'
 
 -- Note: doesn't handle the empty case
-intersperse :: forall n a. a -> List (1+n) a -> List (1 + 2*n) a
+intersperse :: forall n a. a -> List (1+n) a -> List (1 + 2:*n) a
 intersperse e (a0 :| as0) = a0 :| go as0
   where
-    go :: List n' a -> List (2*n') a
+    go :: List n' a -> List (2:*n') a
     go as = case as of
               Nil        -> Nil
               (a :| as') -> e :| a :| go as'
@@ -180,6 +275,95 @@ subsequences = go
     doubleLength :: List (2^k) b -> List (2^k) b -> List (2^(k+1)) b
     doubleLength l1 l2 = l1 ++ l2
 
+-- TODO: permutations
+
+----------------------------
+-- Reducing lists (folds) --
+----------------------------
+
+foldl :: forall n a b. (b -> a -> b) -> b -> List n a -> b
+foldl f = go
+  where
+    go :: forall n'. b -> List n' a -> b
+    go z as = case as of
+                Nil        -> z
+                (a :| as') -> let z' = f z a
+                              in z' `seq` go z' as'
+
+foldl1 :: (a -> a -> a) -> List (n+1) a -> a
+foldl1 f (a :| as) = foldl f a as
+
+foldr :: forall n a b. (a -> b -> b) -> b -> List n a -> b
+foldr f z = go
+  where
+    go :: List n' a -> b
+    go as = case as of
+              Nil        -> z
+              (a :| as') -> f a (go as')
+
+foldr1 :: (a -> a -> a) -> List (n+1) a -> a
+foldr1 f (a :| as) = foldr f a as
+
+-------------------
+-- Special folds --
+-------------------
+
+concat :: forall n m a. List n (List m a) -> List (n:*m) a
+concat = go
+  where
+    go :: List n' (List m a) -> List (n':*m) a
+    go mas = case mas of
+               Nil          -> Nil
+               (ma :| mas') -> ma ++ go mas'
+
+sconcat :: [SomeList a] -> SomeList a
+sconcat = P.foldr append nilList
+
+-- TODO: optimise
+concatMap :: forall n m a b. (a -> List m b) -> List n a -> List (n:*m) b
+concatMap f = concat . fmap f
+
+and :: List n Bool -> Bool
+and = foldr (&&) True
+
+or :: List n Bool -> Bool
+or = foldr (||) False
+
+-- TODO: any
+
+-- TODO: all
+
+-- TODO: sum
+
+-- TODO: product
+
+maximum :: (Ord a) => List (n+1) a -> a
+maximum = foldl1 max
+
+-- TODO: minimum
+
+--------------------
+-- Building lists --
+--------------------
+
+-- TODO: Scans
+
+-- TODO: Accumulating maps
+
+--------------------
+-- Infinite lists --
+--------------------
+
+iterate :: forall n a. (KnownNat n) => (a -> a) -> a -> List n a
+iterate f = go sing
+  where
+    go :: SNat n' -> a -> List n' a
+    go n a = case testEquality n zero of
+               Just Refl -> Nil
+               _         -> a :| go (sPred n) (f a)
+
+-- Cannot implement repeat
+
 replicate :: forall n a. (KnownNat n) => a -> List n a
 replicate a = go sing
   where
@@ -187,6 +371,18 @@ replicate a = go sing
     go n = case testEquality n zero of
              Just Refl -> Nil
              _         -> a :| go (sPred n)
+
+-- Cannot implement cycle
+
+-- TODO: unfoldr; how to implement? SomeList -> as with lists; specified length -> max length, but what if shorter? Either?
+
+--------------
+-- Sublists --
+--------------
+
+-------------------------
+-- Extracting sublists --
+-------------------------
 
 take :: forall n r a. (KnownNat n) => List (n + r) a -> List n a
 take = go sing
@@ -213,8 +409,125 @@ splitAt = go sing
                  -- We know that this must be a :| since n, l, r >= 0
                  (_,         ~(a :| as')) -> first (a:|) (go (sPred l') as')
 
-zero :: SNat 0
-zero = SNat
+-- TODO: how to specify that returned length is <= ?
+
+takeWhile :: forall n a. (a -> Bool) -> List n a -> SomeList a
+takeWhile p = go
+  where
+    go :: List n' a -> SomeList a
+    go as = case as of
+              Nil           -> nilList
+              (a :| as')
+                | p a       -> go as'
+                | otherwise -> nilList
+
+dropWhile :: forall n a. (KnownNat n) => (a -> Bool) -> List n a -> SomeList a
+dropWhile p = go sing
+  where
+    go :: (KnownNat n') => SNat n' -> List n' a -> SomeList a
+    go n as = case as of
+                Nil           -> nilList
+                (a :| as')
+                  | p a       -> let n' = sPred n
+                                 in withKnownNat n' (go n' as')
+                  | otherwise -> someList as
+
+-- TODO: dropWhileEnd
+
+span :: forall n a. (KnownNat n) => (a -> Bool) -> List n a -> (SomeList a, SomeList a)
+span p = go sing
+  where
+    go :: (KnownNat n') => SNat n' -> List n' a -> (SomeList a, SomeList a)
+    go n as = case as of
+                Nil           -> (nilList, nilList)
+                a :| as'
+                  | p a       -> let n' = sPred n
+                                 in withKnownNat n' (first (scons a) (go n' as'))
+                  | otherwise -> (nilList, someList as)
+
+break :: (KnownNat n) => (a -> Bool) -> List n a -> (SomeList a, SomeList a)
+break f = span (not . f)
+
+-- TODO: stripPrefix
+
+-- TODO: return type not that great
+group :: (KnownNat n, Eq a) => List n a -> SomeList (a, SomeList a)
+group = groupBy (==)
+
+groupBy :: forall n a. (KnownNat n) => (a -> a -> Bool) -> List n a -> SomeList (a, SomeList a)
+groupBy f = go . someList
+  where
+    go :: SomeList a -> SomeList (a, SomeList a)
+    go (SomeList n as) = case as of
+                           Nil      -> nilList
+                           a :| as' -> withKnownNat (sPred n)
+                                                    (uncurry scons
+                                                     . bimap ((,) a) go
+                                                     $ span (f a) as')
+
+inits :: forall n a. List n a -> List (n+1) (SomeList a)
+inits = go
+  where
+    go :: List n' a -> List (n'+1) (SomeList a)
+    go as = nilList :| case as of
+                         Nil      -> Nil
+                         a :| as' -> fmap (scons a) (go as')
+
+tails :: forall n a. (KnownNat n) => List n a -> List (n + 1) (SomeList a)
+tails = go sing
+  where
+    go :: (KnownNat n') => SNat n' -> List n' a -> List (n' + 1) (SomeList a)
+    go n as = SomeList n as :| case as of
+                                 Nil      -> Nil
+                                 _ :| as' -> let n' = sPred n
+                                             in withKnownNat n' (go n' as')
+-- TODO: Predicates
+
+---------------------
+-- Searching lists --
+---------------------
+
+---------------------------
+-- Searching by equality --
+---------------------------
+
+-- TODO: elem, notElem
+
+lookup :: forall n k a. (Eq k) => k -> List n (k,a) -> Maybe a
+lookup k0 = go
+  where
+    go :: List n' (k,a) -> Maybe a
+    go kas = case kas of
+               Nil -> Nothing
+               (k,a) :| kas'
+                 | k0 == k   -> Just a
+                 | otherwise -> go kas'
+
+--------------------------------
+-- Searching with a predicate --
+--------------------------------
+
+-- TODO: find
+
+-- TODO: filter
+
+partition :: (a -> Bool) -> List n a -> (SomeList a, SomeList a)
+partition p = foldr select (nilList, nilList)
+  where
+    select = liftA2 (bool first second) p scons
+
+--------------------
+-- Indexing lists --
+--------------------
+
+-- TODO: determine how to do these safely using the dependent length
+
+---------------------------------
+-- Zipping and unzipping lists --
+---------------------------------
+
+zip :: List n a -> List n b -> List n (a,b)
+zip = zipWith (,)
 
 zipWith :: forall n a b c. (a -> b -> c) -> List n a -> List n b -> List n c
 zipWith f = go
@@ -224,8 +537,8 @@ zipWith f = go
                  (Nil,       Nil)      -> Nil
                  ~(a :| as', b :| bs') -> f a b :| go as' bs'
 
-zip :: List n a -> List n b -> List n (a,b)
-zip = zipWith (,)
+unzip :: List n (a,b) -> (List n a, List n b)
+unzip = unzipWith id
 
 unzipWith :: forall n a b c. (c -> (a,b)) -> List n c -> (List n a, List n b)
 unzipWith f = go
@@ -236,8 +549,66 @@ unzipWith f = go
                (c :| lab') -> let (a,b) = f c
                               in bimap (a:|) (b:|) (go lab')
 
-unzip :: List n (a,b) -> (List n a, List n b)
-unzip = unzipWith id
+-- TODO: the rest of them
+
+-------------------
+-- Special lists --
+-------------------
+
+-- TODO: Functions on strings
+
+sortBy :: forall n a. (KnownNat n) => (a -> a -> Ordering) -> List n a -> List n a
+sortBy cmp = mergeAll . sequences n
+  where
+    sequences :: (KnownNat n') => SNat n' -> List n' a -> [SomeList a]
+    sequences n' xs = case xs of
+                        a :| b :| xs'
+                          | a `cmp` b == GT -> withKnownNat n'' (descending n'' b (scons a nilList) xs')
+                          | otherwise       -> withKnownNat n'' (ascending  n'' b (scons a)         xs')
+                        _                   -> [someList xs]
+      where
+        n'' = sPred (sPred n')
+
+    descending :: (KnownNat n') => SNat n' -> a -> SomeList a -> List n' a -> [SomeList a]
+    descending n' a rs xs = case xs of
+                              b :| ys
+                                | a `cmp` b == GT -> let n'' = sPred n'
+                                                     in withKnownNat n'' (descending n'' b (scons a rs) ys)
+                              _                   -> scons a rs : sequences n' xs
+
+    ascending :: (KnownNat n') => SNat n' -> a -> (SomeList a -> SomeList a) -> List n' a -> [SomeList a]
+    ascending n' a toRs xs = case xs of
+                               b :| ys
+                                 | a `cmp` b /= GT -> let n'' = sPred n'
+                                                      in withKnownNat n'' (ascending n'' b (toRs . scons a) ys)
+                               _                   -> toRs (scons a nilList) : sequences n' xs
+
+    merge :: List nl a -> List nr a -> List (nl + nr) a
+    merge ls rs = case (ls, rs) of
+                    (l :| ls', r :| rs')
+                      | l `cmp` r == GT -> r :| merge ls  rs'
+                      | otherwise       -> l :| merge ls' rs
+                    (_, Nil)            -> ls
+                    (Nil, _)            -> rs
+
+    smerge :: SomeList a -> SomeList a -> SomeList a
+    smerge (SomeList ln la) (SomeList rn ra) = let sz = ln %:+ rn
+                                               in withKnownNat sz (SomeList sz (merge la ra))
+
+    mergePairs :: [SomeList a] -> [SomeList a]
+    mergePairs (a:b:xs) = smerge a b : mergePairs xs
+    mergePairs xs       = xs
+
+    mergeAll :: [SomeList a] -> List n a
+    mergeAll [] = error "How did an empty list appear?"
+    mergeAll [SomeList n' as'] = case testEquality n n' of
+                                   Just Refl -> as'
+                                   _         -> error ("sort: expected length of " P.++ show (natVal n)
+                                                       P.++ " doesn't match actual length of " P.++ show (natVal n'))
+    mergeAll xs  = mergeAll (mergePairs xs)
+
+    n :: SNat n
+    n = SNat
 
 ordBuckets :: forall n k a. (Ord k) => List n (k,a) -> List n (k -> Bool)
 ordBuckets lst = case lst of
@@ -291,73 +662,5 @@ lookupOrd v = go
 
 --------------------------------------------------------------------------------
 
-data SomeList :: * -> * where
-  SomeList :: forall n a. (KnownNat n) => SNat n -> List n a -> SomeList a
-
-someList :: (KnownNat n) => List n a -> SomeList a
-someList = SomeList SNat
-
-nilList :: SomeList a
-nilList = SomeList zero Nil
-
-instance (Eq a) => Eq (SomeList a) where
-  (SomeList nl ll) == (SomeList nr lr)
-    = case testEquality nl nr of
-        Just Refl -> withKnownNat nl (withKnownNat nr (ll == lr))
-        Nothing   -> False
-
--- | Compares on lengths before comparing on values.
-instance (Ord a) => Ord (SomeList a) where
-  compare (SomeList nl ll) (SomeList nr lr) =
-    case (fromSing (sCompare nl nr), testEquality nl nr) of
-      -- Malformed instances may end up having this return (EQ, Nothing)...
-      (EQ, Just Refl) -> compare ll lr
-      (ne,_)          -> ne
-
-instance (Show a) => Show (SomeList a) where
-  showsPrec d (SomeList _ l) = showsPrec d l
-
-instance (Read a) => Read (SomeList a) where
-  readPrec = (do Ident "Nil" <- lexP
-                 return nilList)
-             <++
-             (parens . prec 10 $ do a <- readPrec
-                                    Symbol ":|" <- lexP
-                                    as <- readPrec
-                                    return (scons a as))
-
-instance Monoid (SomeList a) where
-  mempty = nilList
-
-  mappend = append
-
-  mconcat = concat
-
-scons :: a -> SomeList a -> SomeList a
-scons a sl = case sl of
-               SomeList n as -> let m = sSucc n
-                                in withKnownNat n (withKnownNat m (SomeList m (a :| as)))
-
-unscons :: SomeList a -> Maybe (a, SomeList a)
-unscons (SomeList n as) = case as of
-                            Nil      -> Nothing
-                            a :| as' -> let m = sPred n
-                                        in withKnownNat m (Just (a, SomeList m as'))
-
-instance IsList (SomeList a) where
-  type Item (SomeList a) = a
-
-  fromList = foldr scons nilList
-
-  toList = unfoldr unscons
-
-append :: SomeList a -> SomeList a -> SomeList a
-append (SomeList nl ll) (SomeList nr lr)
-  = let n = nl %:+ nr
-    in withKnownNat n (SomeList n (ll ++ lr))
-
-concat :: [SomeList a] -> SomeList a
-concat = foldr append nilList
-
-slength :: SomeList a -> Integer
-slength (SomeList n _) = natVal n
+zero :: SNat 0
+zero = SNat
