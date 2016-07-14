@@ -16,13 +16,15 @@ module Data.Hitchhiker where
 
 import Data.List.Dependent
 
-import Data.Proxy
 import Data.Singletons.Prelude.Num
 import Data.Singletons.TypeLits
 import GHC.TypeLits
 
 --------------------------------------------------------------------------------
 
+-- | A Hitchhiker Tree where each internal node stores at most @l@
+--   messages and each non-root node has between @b@ and @2b@
+--   children.
 data HTree l b k a where
   Empty   :: HTree l b k a
 
@@ -34,20 +36,11 @@ data HTree l b k a where
   Full    :: forall c e d l b k a. (2 <= c, c <= (2:*b), e <= l)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
+-- c == number of children.
+type Children c d l b k a = List c (k, HNode d l b k a)
+type Leaves   c       k a = List c (k, Log k a)
+
 deriving instance (Show k, Show a) => Show (HTree l b k a)
-
-data Statement k a = Assert k a
-                   | Retract k
-  deriving (Eq, Ord, Show, Read)
-
-type Log k a = [Statement k a]
-
-type Leaves c k a = List c (k, Log k a)
-type Children c t l b k a = List c (k, HNode t l b k a)
-
-type NodeLog l k a = List l (Statement k a)
-
-data NType = Internal | Leaf
 
 -- | A node of depth @d@ containing at most @l@ internal logs per node,
 --   branch factor @b@, keys @k@ and values @a@.
@@ -61,3 +54,19 @@ data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
            -> HNode d l b k a
 
 deriving instance (Show k, Show a) => Show (HNode d l b k a)
+
+--------------------------------------------------------------------------------
+
+-- | Specify a change in value @a@ for a particular key @k@.
+data Statement k a = Assert k a
+                   | Retract k
+  deriving (Eq, Ord, Show, Read)
+
+keyFor :: Statement k a -> k
+keyFor (Assert  k _) = k
+keyFor (Retract k)   = k
+
+type Log k a = [Statement k a]
+type NodeLog l k a = List l (Statement k a)
+
+--------------------------------------------------------------------------------
