@@ -26,6 +26,8 @@
  -}
 module Data.List.Dependent where
 
+import Data.List.Dependent.Numeric
+
 import           Prelude hiding (Foldable (..), break, concat, drop, iterate,
                           length, map, replicate, span, splitAt, take, zip,
                           zipWith, (++))
@@ -659,6 +661,14 @@ lookupOrd v = go
 -- | For a given key @k@ and indexed list, finds the first @a_i@ where
 --   @k_i <= k < k_{i+1}@ (or @k_0@ if @k < k_0@).
 -- ordRegion :: k ->
+
+splitInto :: forall n d q r a. (DivMod n d q r) => List n a -> (List r a, List q (List d a))
+splitInto = second (go sing) . splitAt
+  where
+    go :: SNat q' -> List (q' :* d) a -> List q' (List d a)
+    go q as = case testEquality q zero of
+                Just Refl -> Nil
+                _         -> uncurry (\l1 as' -> l1 :| go (sPred q) as') (splitAt as)
 
 --------------------------------------------------------------------------------
 
