@@ -1,4 +1,4 @@
-{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, GADTs, RankNTypes,
+{-# LANGUAGE DataKinds, DeriveFunctor, GADTs, MultiParamTypeClasses, RankNTypes,
              ScopedTypeVariables, StandaloneDeriving, TypeFamilies,
              TypeOperators #-}
 
@@ -643,7 +643,7 @@ insertOrdOn mrg cmp v = go
                             EQ -> Left (mrg v a :| as')
                             GT -> a `eCons` go as'
 
-    eCons :: forall n'. a -> Either (List (n'-1) a) (List n' a) -> Either (List n' a) (List (n'+1) a)
+    eCons :: forall n'. a -> Either (List (n':-1) a) (List n' a) -> Either (List n' a) (List (n'+1) a)
     eCons a = bimap (a:|) (a:|)
 
 -- | TODO: is it worth trying to do a binary search?
