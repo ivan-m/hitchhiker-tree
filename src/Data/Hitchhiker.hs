@@ -2,6 +2,8 @@
              KindSignatures, MultiParamTypeClasses, ScopedTypeVariables,
              StandaloneDeriving, TypeOperators #-}
 
+{-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
+
 {- |
    Module      : Data.Hitchhiker
    Description : The \"Data.Hitchhiker\" module
@@ -14,11 +16,21 @@
  -}
 module Data.Hitchhiker where
 
+import Prelude hiding (head, (++))
+
 import Data.List.Dependent
 
-import Data.Singletons.Prelude.Num
+-- Until the list module re-exports this
+import Data.List.Dependent.Numeric
+
+import Data.Singletons.Prelude
+import Data.Singletons.Prelude
 import Data.Singletons.TypeLits
 import GHC.TypeLits
+
+import Control.Applicative (liftA2)
+import Data.Bifunctor      (second)
+import Data.Constraint     hiding ((:-))
 
 --------------------------------------------------------------------------------
 
@@ -45,10 +57,10 @@ deriving instance (Show k, Show a) => Show (HTree l b k a)
 -- | A node of depth @d@ containing at most @l@ internal logs per node,
 --   branch factor @b@, keys @k@ and values @a@.
 data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
-  HLeaf :: forall c      l b k a. (b <= c, c <= (2:*b))
+  HLeaf :: forall c      l b k a. (b <= c, c <= (2:*b), KnownNat c)
            => Leaves c k a -> HNode 0 l b k a
 
-  HInt  :: forall c e d l b k a. (b <= c, c <= (2:*b), e <= l)
+  HInt  :: forall c e d l b k a. (b <= c, c <= (2:*b), e <= l, KnownNat c, KnownNat e)
            => NodeLog e k a             -- ^ Internal log
            -> Children c (d:-1) l b k a -- ^ Sub-nodes with minimum key
            -> HNode d l b k a
@@ -70,3 +82,35 @@ type Log k a = [Statement k a]
 type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
+
+-- addLog :: forall e d l b k a. (Ord k, KnownNat b, 1 <= b) => NodeLog e k a -> (k, HNode d l b k a)
+--           -> SomeList (k, HNode d l b k a)
+-- addLog lg (k0,hn) = case hn of
+--                       HLeaf lvs -> case insertOrdAll mappend (fromLog lg) lvs of
+--                                      SomeList lc' lvs' -> case fromSing (sCompare lc' ub) of
+--                                         GT -> case splitNode lc' lb lvs' of
+--                                                 (rb,q) -> mkLeaf rb `scons` someList (fmap mkLeaf q)
+--   where
+--     lb :: SNat b
+--     lb = SNat
+
+--     ub :: SNat (2 :* b)
+--     ub = (SNat :: SNat 2) %:* lb
+
+--     fromLog :: NodeLog c' k' a' -> List c' (k', [Statement k' a'])
+--     fromLog = fmap (liftA2 (,) keyFor (:[]))
+
+--     -- Because r < b, r+b < 2b, thus upper bound is not violated.  We
+--     -- just need to tell GHC that.
+--     splitNode :: (CalcQuotRem c b, 1 <= Quot c b)
+--                  => SNat c -> SNat b -> List c v -> (List (Rem c b +b) v, List (Quot c b :- 1) (List b v))
+--     splitNode SNat SNat ls = case splitInto ls of
+--                                (r,(l :| q)) -> (r ++ l, q)
+
+--     mkLeaf :: (KnownNat c, b <= c, 1 <= c, c <= (2:*b)) => Leaves c k a -> (k, HNode 0 l b k a)
+--     mkLeaf lvs = (fst (head' lvs), HLeaf lvs)
+
+--     -- The type-checker isn't too smart
+
+-- blah :: (KnownNat b, b <= (2 :* b)) => SNat b -> Integer
+-- blah = natVal

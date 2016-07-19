@@ -43,7 +43,6 @@ import GHC.TypeLits
 import Control.Applicative             (liftA2)
 import Data.Bifunctor                  (bimap, first, second)
 import Data.Bool
-import Data.Function                   (on)
 import Data.List                       (unfoldr)
 import GHC.Exts                        (IsList (..))
 import Text.ParserCombinators.ReadPrec (ReadPrec, prec, (<++))
@@ -170,8 +169,11 @@ append (SomeList nl ll) (SomeList nr lr)
   = let n = nl %:+ nr
     in withKnownNat n (SomeList n (ll ++ lr))
 
-head :: List (n+1) a -> a
+head :: List (1+n) a -> a
 head (a :| _) = a
+
+head' :: (1 <= n) => List n a -> a
+head' (a :| _) = a
 
 last :: forall n a. (KnownNat n) => List (n+1) a -> a
 last = go sing
@@ -181,7 +183,7 @@ last = go sing
                  (a :| Nil) -> a
                  (_ :| as') -> go (sPred n1) as'
 
-tail :: List (n+1) a -> List n a
+tail :: List (1+n) a -> List n a
 tail (_ :| as) = as
 
 init :: forall n a. (KnownNat n) => List (n+1) a -> List n a
@@ -219,6 +221,9 @@ snull (SomeList _ as) = null as
 -- O(1) !!!
 length :: forall n a. (KnownNat n) => List n a -> Integer
 length _ = natVal (Proxy :: Proxy n)
+
+lengthNat :: (KnownNat n) => List n a -> SNat n
+lengthNat _ = SNat
 
 slength :: SomeList a -> Integer
 slength (SomeList n _) = natVal n
@@ -631,20 +636,30 @@ ordBuckets lst = case lst of
 
 -- | Merging function is @f new old@.  Key-getting function assumed to
 --   be O(1).
-insertOrdOn :: forall n a k. (Ord k) => (a -> a -> a) -> (a -> k)
-               -> a -> List n a -> Either (List n a) (List (n+1) a)
-insertOrdOn mrg cmp v = go
+insertOrd:: forall n a k. (Ord k) => (a -> a -> a) -> k -> a
+            -> List n (k,a) -> Either (List n (k,a)) (List (n+1) (k,a))
+insertOrd mrg k0 v = go
   where
-    go :: List n' a -> Either (List n' a) (List (n'+1) a)
-    go as = case as of
-              Nil      -> Right (v :| Nil)
-              a :| as' -> case (compare `on` cmp) v a of
-                            LT -> Right (v :| as)
-                            EQ -> Left (mrg v a :| as')
-                            GT -> a `eCons` go as'
+    go :: List n' (k,a) -> Either (List n' (k,a)) (List (n'+1) (k,a))
+    go kas = case kas of
+               Nil              -> Right ((k0,v) :| Nil)
+               ka@(k,a) :| kas' -> case compare k0 k of
+                                     LT -> Right ((k0,v) :| kas)
+                                     EQ -> Left ((k,mrg v a) :| kas')
+                                     GT -> ka `eCons` go kas'
 
-    eCons :: forall n'. a -> Either (List (n':-1) a) (List n' a) -> Either (List n' a) (List (n'+1) a)
-    eCons a = bimap (a:|) (a:|)
+    eCons :: b -> Either (List (n':-1) b) (List n' b) -> Either (List n' b) (List (n'+1) b)
+    eCons b = bimap (b:|) (b:|)
+
+-- | Insert first list into second (assumed sorted).
+insertOrdAll :: forall n m k a. (Ord k, KnownNat m) => (a -> a -> a)
+                -> List n (k,a) -> List m (k,a) -> SomeList (k,a)
+insertOrdAll mrg ins bs = foldr go (someList bs) ins
+  where
+    go :: (k,a) -> SomeList (k,a) -> SomeList (k,a)
+    go (k,a) (SomeList n res) = let n1 = sSucc n
+                                in withKnownNat n1 (either (SomeList n) (SomeList n1)
+                                                           (insertOrd mrg k a res))
 
 -- | TODO: is it worth trying to do a binary search?
 lookupOrd :: forall n a k. (Ord k) => k -> List n (k,a) -> Maybe a
