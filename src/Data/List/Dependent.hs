@@ -1,6 +1,6 @@
-{-# LANGUAGE DataKinds, DeriveFunctor, GADTs, MultiParamTypeClasses, RankNTypes,
-             ScopedTypeVariables, StandaloneDeriving, TypeFamilies,
-             TypeOperators #-}
+{-# LANGUAGE DataKinds, DeriveFunctor, FlexibleContexts, GADTs,
+             MultiParamTypeClasses, RankNTypes, ScopedTypeVariables,
+             StandaloneDeriving, TypeFamilies, TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
@@ -40,14 +40,18 @@ import Data.Singletons.TypeLits
 import Data.Type.Equality
 import GHC.TypeLits
 
-import Control.Applicative             (liftA2)
-import Data.Bifunctor                  (bimap, first, second)
-import Data.Bool
-import Data.List                       (unfoldr)
-import GHC.Exts                        (IsList (..))
-import Text.ParserCombinators.ReadPrec (ReadPrec, prec, (<++))
-import Text.Read                       (Lexeme (Ident, Symbol), Read (..), lexP,
-                                        parens, readListPrecDefault, readPrec)
+import           Control.Applicative             (liftA2)
+import           Data.Bifunctor                  (bimap, first, second)
+import           Data.Bool
+import           Data.Constraint                 hiding ((:-), ins)
+import qualified Data.Constraint                 as C
+import           Data.Constraint.Unsafe          (unsafeCoerceConstraint)
+import           Data.List                       (unfoldr)
+import           GHC.Exts                        (IsList (..))
+import           Text.ParserCombinators.ReadPrec (ReadPrec, prec, (<++))
+import           Text.Read                       (Lexeme (Ident, Symbol),
+                                                  Read (..), lexP, parens,
+                                                  readListPrecDefault, readPrec)
 
 --------------------------------------------------------------------------------
 
@@ -172,7 +176,7 @@ append (SomeList nl ll) (SomeList nr lr)
 head :: List (1+n) a -> a
 head (a :| _) = a
 
-head' :: (1 <= n) => List n a -> a
+head' :: (1 ::<= n) => List n a -> a
 head' (a :| _) = a
 
 last :: forall n a. (KnownNat n) => List (n+1) a -> a
@@ -198,6 +202,9 @@ uncons :: List n a -> Maybe (a, List (n-1) a)
 uncons as = case as of
                Nil      -> Nothing
                a :| as' -> Just (a, as')
+
+uncons' :: (1 ::<= n) => List n a -> (a, List (n:-1) a)
+uncons' (a :| as) = (a, as)
 
 scons :: a -> SomeList a -> SomeList a
 scons a sl = case sl of
@@ -259,15 +266,16 @@ transpose :: forall r c a. (KnownNat c) => List r (List c a) -> List c (List r a
 transpose = go sing
   where
     go :: SNat c' -> List r (List c' a) -> List c' (List r a)
-    go c' rs = case testEquality c' zero of
-                 Just Refl -> Nil
-                 _         -> let (c, rs') = nextC rs
-                              in c :| go (sPred c') rs'
+    go c rs = case testEquality c zero of
+                Just Refl -> Nil
+                _         -> let (col, rs') = nextC c rs
+                             in col :| go (sPred c) rs'
 
-    uncons' :: List (1+n) b -> (b, List n b)
-    uncons' (b:|bs) = (b, bs)
+    nextC :: SNat (c'+1) -> List r (List (c'+1) a) -> (List r a, List r (List c' a))
+    nextC c1 = unzipWith uncons' \\ isGTEOne c1
 
-    nextC = unzipWith uncons'
+isGTEOne :: proxy (n+1) -> () C.:- (1 ::<= (n+1))
+isGTEOne _ = unsafeCoerceConstraint
 
 subsequences :: forall n a. List n a -> List (2^n) (SomeList a)
 subsequences = go
@@ -677,8 +685,8 @@ lookupOrd v = go
 --   @k_i <= k < k_{i+1}@ (or @k_0@ if @k < k_0@).
 -- ordRegion :: k ->
 
-splitInto :: forall n d q r a. (DivMod n d q r) => List n a -> (List r a, List q (List d a))
-splitInto = second (go sing) . splitAt
+splitInto :: forall n d a. (HasQuotRem n d) => List n a -> (List (Rem n d) a, List (Quot n d) (List d a))
+splitInto = second (go sing) . splitAt \\ validQuotRem (SNat :: SNat n) (SNat :: SNat d)
   where
     go :: SNat q' -> List (q' :* d) a -> List q' (List d a)
     go q as = case testEquality q zero of
