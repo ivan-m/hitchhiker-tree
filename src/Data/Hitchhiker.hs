@@ -34,6 +34,7 @@ import           Data.Bifunctor         (second)
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
+import           Unsafe.Coerce          (unsafeCoerce)
 
 --------------------------------------------------------------------------------
 
@@ -89,17 +90,21 @@ type NodeLog l k a = List l (Statement k a)
 addLog :: forall e d l b k a. (Ord k, KnownNat b, 1 ::<= b) => NodeLog e k a -> (k, HNode d l b k a)
           -> SomeList (k, HNode d l b k a)
 addLog lg (k0,hn) = case hn of
-                      HLeaf lvs -> case insertOrdAll mappend (fromLog lg) lvs of
-                                     SomeList lc' lvs' -> case testEquality (ub %:< lc') STrue of
-                                       Just Refl -> (case splitNode lc' lvs'  of
-                                          (rb,ql,q,r) -> (mkLeaf rb `scons` someList (fmap mkLeaf ql))
-                                                         \\ stillNatPlus r lb
-                                                         \\ stillNatPred q
-                                                         \\ nonZeroQuot lc' lb
-                                                         \\ monotInc r
-                                                         \\ validQuotRem lc' lb
-                                                         \\ lbLTub)
-                                                       \\ doubleLT lb lc'
+  HLeaf lvs -> case insertOrdAll mappend (fromLog lg) lvs of
+                  SomeList lc' lvs' -> case trueOrFalse (ub %:<  lc') of
+                    Left Refl -> (case splitNode lc' lvs'  of
+                      (rb,ql,q,r) -> (mkLeaf rb `scons` someList (fmap mkLeaf ql))
+                                     \\ stillNatPlus r lb
+                                     \\ stillNatPred q
+                                     \\ nonZeroQuot lc' lb
+                                     \\ monotInc r
+                                     \\ validQuotRem lc' lb
+                                     \\ lbLTub)
+                                   \\ doubleLT lb lc'
+                    -- This is going to be true by construction, but have to prove it.
+                    Right Refl -> scons (mkLeaf lvs') nilList \\ transitiveLT lb lc'
+                                                              \\ stillLT lc'
+                                                              \\ invGT ub lc'
 
   where
     lb :: SNat b
@@ -133,7 +138,11 @@ addLog lg (k0,hn) = case hn of
     monotInc :: proxy (r) -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), 1 ::<= (r+b), (r+b) ::<= 2:*b)
     monotInc _ = unsafeCoerceConstraint
 
-doubleLT :: SNat a -> SNat b -> ((2*a :< b) ~ 'True) C.:- (a ::<= b)
+    -- insertOrdAll can't decrease the number of values
+    stillLT :: proxy c -> () C.:- (b ::<= c)
+    stillLT _ = unsafeCoerceConstraint
+
+doubleLT :: SNat a -> SNat b -> ((2:*a :< b) ~ 'True) C.:- (a ::<= b)
 doubleLT _ _ = unsafeCoerceConstraint
 
 stillNatPlus :: proxy a -> proxy b -> (KnownNat a, KnownNat b) C.:- (KnownNat (a+b))
@@ -141,3 +150,14 @@ stillNatPlus _ _ = unsafeCoerceConstraint
 
 stillNatPred :: proxy n -> (KnownNat n, 1 ::<= n) C.:- (KnownNat (Pred n))
 stillNatPred _ = unsafeCoerceConstraint
+
+transitiveLT :: proxy a -> proxy b -> (1 ::<= a, a ::<= b) C.:- (1 ::<= b)
+transitiveLT _ _ = unsafeCoerceConstraint
+
+invGT :: SNat a -> SNat b -> ((a :< b) ~ 'False) C.:- (b ::<= a)
+invGT _ _ = unsafeCoerceConstraint
+
+trueOrFalse :: SBool b -> Either (b :~: 'True) (b :~: 'False)
+trueOrFalse b = case testEquality b STrue of
+                  Just Refl -> Left Refl
+                  Nothing   -> Right (unsafeCoerce Refl)
