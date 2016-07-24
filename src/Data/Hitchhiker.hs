@@ -1,6 +1,6 @@
 {-# LANGUAGE ConstraintKinds, DataKinds, FlexibleContexts, GADTs,
-             KindSignatures, MultiParamTypeClasses, ScopedTypeVariables,
-             StandaloneDeriving, TypeOperators #-}
+             KindSignatures, MultiParamTypeClasses, RankNTypes,
+             ScopedTypeVariables, StandaloneDeriving, TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
 
@@ -127,6 +127,46 @@ addLog lg (k0,hn) = case hn of
                        \\ validQuotRem c lb
 
     mkLeaf :: forall c. (KnownNat c, b ::<= c, 1 ::<= c, c ::<= (2:*b)) => Leaves c k a -> (k, HNode 0 l b k a)
+    mkLeaf lvs = (fst (head' lvs), HLeaf lvs)
+
+    -- The type-checker needs some help
+
+    lbLTub :: (1 ::<= b) C.:- (b ::<= 2 :* b)
+    lbLTub = unsafeCoerceConstraint
+
+    -- 1 <= b, 0 <= r
+    monotInc :: proxy (r) -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), 1 ::<= (r+b), (r+b) ::<= 2:*b)
+    monotInc _ = unsafeCoerceConstraint
+
+    -- insertOrdAll can't decrease the number of values
+    stillLT :: proxy c -> () C.:- (b ::<= c)
+    stillLT _ = unsafeCoerceConstraint
+
+addLeaves :: forall e d l b k a c lb res. (Ord k, KnownNat b, 1 ::<= b, lb ::<= c, 1 ::<= lb, lb ::<= b)
+             => Proxy (lb :: Nat) -> (forall c'. (lb ::<= c', c' ::<= 2 :* b) => Leaves c' k a -> res k a)
+             -> NodeLog e k a -> Leaves c k a -> SomeList (k, res l k a)
+addLeaves lb mkRes lg lvs = undefined
+  where
+    b :: SNat b
+    b = SNat
+
+    ub :: SNat (2:*b)
+    ub = SNat
+
+    fromLog :: NodeLog c' k' a' -> List c' (k', [Statement k' a'])
+    fromLog = fmap (liftA2 (,) keyFor (:[]))
+
+    -- Because r < b, r+b < 2b, thus upper bound is not violated.  We
+    -- just need to tell GHC that.
+    splitNode :: (HasQuotRem c b, b ::<= c)
+                 => SNat c -> List c v -> (List (Rem c b + b) v, List (Quot c b :- 1) (List b v), SNat (Quot c b), SNat (Rem c b))
+    splitNode c ls = (case splitInto ls of
+                        (r, lq) -> case uncons' lq of
+                                     (l, q) -> (r ++ l, q, SNat, SNat)
+                     ) \\ nonZeroQuot c lb -- Avoid complaining about missing case
+                       \\ validQuotRem c lb
+
+    mkLeaf :: forall c. (KnownNat c, lb ::<= c, 1 ::<= c, c ::<= (2:*b)) => Leaves c k a -> (k, res l b k a)
     mkLeaf lvs = (fst (head' lvs), HLeaf lvs)
 
     -- The type-checker needs some help
