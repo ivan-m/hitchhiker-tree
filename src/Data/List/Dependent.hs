@@ -142,7 +142,7 @@ instance Monoid (SomeList a) where
 
   mappend = append
 
-  mconcat = sconcat
+  mconcat = sconcat'
 
 instance IsList (SomeList a) where
   type Item (SomeList a) = a
@@ -331,8 +331,19 @@ concat = go
                Nil          -> Nil
                (ma :| mas') -> ma ++ go mas'
 
-sconcat :: [SomeList a] -> SomeList a
-sconcat = P.foldr append nilList
+sconcat :: SomeList (SomeList a) -> SomeList a
+sconcat = withSomeList concatS
+
+concatS :: List n (SomeList a) -> SomeList a
+concatS = go
+  where
+   go :: List n' (SomeList a) -> SomeList a
+   go as = case as of
+             Nil      -> nilList
+             a :| as' -> append a (go as')
+
+sconcat' :: [SomeList a] -> SomeList a
+sconcat' = P.foldr append nilList
 
 -- TODO: optimise
 concatMap :: forall n m a b. (a -> List m b) -> List n a -> List (n:*m) b

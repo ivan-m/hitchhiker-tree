@@ -16,7 +16,7 @@
  -}
 module Data.Hitchhiker where
 
-import Prelude hiding (head, (++))
+import Prelude hiding (head, zipWith, (++))
 
 import Data.List.Dependent
 
@@ -96,9 +96,9 @@ type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
 
-addLog :: forall e d l b k a. (Ord k, KnownNat b, 1 ::<= b) => NodeLog e k a -> (k, HNode d l b k a)
+addLog :: forall e d l b k a. (Ord k, KnownNat b, 1 ::<= b) => NodeLog e k a -> HNode d l b k a
           -> SomeList (k, HNode d l b k a)
-addLog lg (k0,hn) = case hn of
+addLog lg hn = case hn of
   HLeaf lvs -> addLeaves b HLeaf lg lvs
 
   where
@@ -164,6 +164,38 @@ addLeaves lb mkRes lg lvs =
     -- insertOrdAll can't decrease the number of values
     stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
     stillLT _ = unsafeCoerceConstraint
+
+addInternal :: forall d l b k a lb lc e c res.
+               (Ord k, KnownNat b, KnownNat c, KnownNat l, KnownNat lc, KnownNat e, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b, e ::<= l, 1 ::<= d)
+               => SNat lb -> (forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d-1) l b k a -> res l b k a)
+               -> NodeLog lc k a -> NodeLog e k a -> Children c (d-1) l b k a -> SomeList (k, res l b k a)
+addInternal lb mkRes lgAdd lg chld
+  = case trueOrFalse (l %:< e') of
+      Left Refl -> undefined
+  where
+    l :: SNat l
+    l = SNat
+
+    hasLCE = stillNatPlus (SNat :: SNat lc) (SNat :: SNat e)
+
+    lg' = lgAdd ++ lg
+
+    e' = lengthNat lg' \\ hasLCE
+
+    lgBkts :: List c (SomeList (Statement k a))
+    lgBkts = go (ordBuckets chld) (someList lg' \\ hasLCE)
+      where
+        go :: forall c'. List c' (k -> Bool) -> SomeList (Statement k a) -> List c' (SomeList (Statement k a))
+        go ps (SomeList _ stmts) = case ps of
+                                     Nil      -> Nil
+                                     p :| ps' -> case partition (p . keyFor) stmts of
+                                                   (pStmts, stmts') -> pStmts :| go ps' stmts'
+
+    chld' = concatS (zipWith addLogsTo lgBkts chld)
+
+    addLogsTo :: SomeList (Statement k a) -> (k,HNode (d-1) l b k a) -> SomeList (k, HNode (d-1) l b k a)
+    addLogsTo (SomeList _ Nil) kn    = kn `scons` nilList
+    addLogsTo (SomeList _ clg) (_,n) = addLog clg n
 
 doubleLT :: SNat a -> SNat b -> ((2:*a :< b) ~ 'True) C.:- (a ::<= b)
 doubleLT _ _ = unsafeCoerceConstraint
