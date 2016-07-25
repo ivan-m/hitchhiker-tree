@@ -45,11 +45,11 @@ data HTree l b k a where
   Empty   :: HTree l b k a
 
   -- | Partial root node, acting like a leaf.
-  Partial :: forall c     l b k a. (1 ::<= c, c ::<= 2:*b)
+  Partial :: forall c     l b k a. (LeafC 1 b c)
              => Leaves c k a -> HTree l b k a
 
   -- | Full root node, acting like an internal node.
-  Full    :: forall c e d l b k a. (2 ::<= c, c ::<= (2:*b), e ::<= l)
+  Full    :: forall c e d l b k a. (IntC l 2 b e c)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
 -- c == number of children.
@@ -58,13 +58,22 @@ type Leaves   c       k a = List c (k, Log k a)
 
 deriving instance (Show k, Show a) => Show (HTree l b k a)
 
+type LeafC   lb b   c = (lb ::<= c, c ::<= (2:*b),                       KnownNat c)
+type IntC  l lb b e c = (lb ::<= c, c ::<= (2:*b), e ::<= l, KnownNat e, KnownNat c)
+
+one :: SNat 1
+one = SNat
+
+two :: SNat 2
+two = SNat
+
 -- | A node of depth @d@ containing at most @l@ internal logs per node,
 --   branch factor @b@, keys @k@ and values @a@.
 data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
-  HLeaf :: forall c      l b k a. (b ::<= c, c ::<= (2:*b), KnownNat c)
+  HLeaf :: forall c      l b k a. (LeafC b b c)
            => Leaves c k a -> HNode 0 l b k a
 
-  HInt  :: forall c e d l b k a. (b ::<= c, c ::<= (2:*b), e ::<= l, KnownNat c, KnownNat e)
+  HInt  :: forall c e d l b k a. (IntC l b b e c)
            => NodeLog e k a             -- ^ Internal log
            -> Children c (d:-1) l b k a -- ^ Sub-nodes with minimum key
            -> HNode d l b k a
@@ -98,7 +107,7 @@ addLog lg (k0,hn) = case hn of
 
 addLeaves :: forall e (l :: Nat) b k a c lb res.
              (Ord k, KnownNat b, KnownNat c, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b)
-             => SNat lb -> (forall c'. (KnownNat c', lb ::<= c', c' ::<= 2 :* b) => Leaves c' k a -> res l b k a)
+             => SNat lb -> (forall c'. (LeafC lb b c') => Leaves c' k a -> res l b k a)
              -> NodeLog e k a -> Leaves c k a -> SomeList (k, res l b k a)
 addLeaves lb mkRes lg lvs =
   case insertOrdAll mappend (fromLog lg) lvs of
@@ -123,7 +132,7 @@ addLeaves lb mkRes lg lvs =
     b = SNat
 
     ub :: SNat (2:*b)
-    ub = (SNat :: SNat 2) %:* b
+    ub = two %:* b
 
     fromLog :: NodeLog c' k' a' -> List c' (k', [Statement k' a'])
     fromLog = fmap (liftA2 (,) keyFor (:[]))
