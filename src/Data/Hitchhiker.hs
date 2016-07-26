@@ -42,15 +42,16 @@ import           Unsafe.Coerce          (unsafeCoerce)
 --   messages and each non-root node has between @b@ and @2b@
 --   children.
 data HTree l b k a where
-  Empty   :: HTree l b k a
-
   -- | Partial root node, acting like a leaf.
-  Partial :: forall c     l b k a. (LeafC 1 b c)
+  Partial :: forall c     l b k a. (LeafC 0 b c)
              => Leaves c k a -> HTree l b k a
 
   -- | Full root node, acting like an internal node.
   Full    :: forall c e d l b k a. (IntC l 2 b e c)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
+
+empty :: forall l b k a. (Hitchhiker l b k) => HTree l b k a
+empty = Partial Nil \\ zeroAlwaysLT (two %:* (SNat :: SNat b))
 
 -- c == number of children.
 type Children c d l b k a = List c (k, HNode d l b k a)
@@ -58,7 +59,7 @@ type Leaves   c       k a = List c (k, Log k a)
 
 deriving instance (Show k, Show a) => Show (HTree l b k a)
 
-type LeafC   lb b   c = (1 ::<= lb, lb ::<= c, c ::<= (2:*b),                       KnownNat c)
+type LeafC   lb b   c = (           lb ::<= c, c ::<= (2:*b),                       KnownNat c)
 type IntC  l lb b e c = (1 ::<= lb, lb ::<= c, c ::<= (2:*b), e ::<= l, KnownNat e, KnownNat c)
 
 one :: SNat 1
@@ -99,7 +100,7 @@ type NodeLog l k a = List l (Statement k a)
 type Hitchhiker l b k = (Ord k, KnownNat l, KnownNat b, 2 ::<= b)
 
 fromList :: (Hitchhiker l b k) => [(k,a)] -> HTree l b k a
-fromList = (`addStatements` Empty) . map (uncurry Assert)
+fromList = (`addStatements` empty) . map (uncurry Assert)
 
 insert :: (Hitchhiker l b k) => k -> a -> HTree l b k a -> HTree l b k a
 insert k a = addStatements [Assert k a]
@@ -111,7 +112,7 @@ delete k = addStatements [Retract k]
 
 addStatements :: forall l b k a. (Hitchhiker l b k)
                  => [Statement k a] -> HTree l b k a -> HTree l b k a
-addStatements stmts = withSomeListN withDList (L.fromList stmts)
+addStatements stmts = withSomeList withDList (L.fromList stmts)
   where
     b :: SNat b
     b = SNat
@@ -122,19 +123,13 @@ addStatements stmts = withSomeListN withDList (L.fromList stmts)
     l :: SNat l
     l = SNat
 
-    withDList :: (KnownNat n) => SNat n -> NodeLog n k a -> HTree l b k a -> HTree l b k a
-    withDList n lgAdd ht = case lgAdd of
+    withDList :: (KnownNat n) => NodeLog n k a -> HTree l b k a -> HTree l b k a
+    withDList lgAdd ht = case lgAdd of
       Nil -> ht
       _   -> case ht of
-               Empty        -> (case unsnoc lgAdd of
-                                  (lg',stmt) -> let n'  = sPred n
-                                                    ht0 = Partial ((keyFor stmt, [stmt]) :| Nil) \\ doubleGT b
-                                                                                                 \\ oneLT2
-                                                in withKnownNat n' (withDList n' lg' ht0)
-                               ) \\ nonZero n -- TODO: find a better implementation.
-
-               Partial lvs  -> checkOverflow (addLeaves   one Partial lgAdd lvs)     \\ oneLT2
-               Full lg chld -> checkOverflow (addInternal two Full    lgAdd lg chld) \\ oneLT2
+               Partial lvs  -> checkOverflow (addLeaves   zero Partial lgAdd lvs)     \\ oneLT2
+                                                                                      \\ zeroAlwaysLT b
+               Full lg chld -> checkOverflow (addInternal two  Full    lgAdd lg chld) \\ oneLT2
 
     checkOverflow :: Either (k,HTree l b k a) (SomeList (k, HNode d l b k a)) -> HTree l b k a
     checkOverflow = either snd handleOverflow
@@ -173,12 +168,8 @@ addStatements stmts = withSomeListN withDList (L.fromList stmts)
     mkNode :: forall c d. (KnownNat c, b ::<= c, c ::<= (2:*b))
               => Children c d l b k a -> (k, HNode (d+1) l b k a)
     mkNode chld = (fst (head' chld), HInt Nil chld) \\ zeroAlwaysLT l
-                                                    \\ transitiveLT b (SNat :: SNat c)
+                                                    \\ transitiveLT1 b (SNat :: SNat c)
                                                     \\ oneLT2
-
-    -- Because it should really work this out for itself.
-    nonZero :: proxy n -> () C.:- (1 ::<= n)
-    nonZero _ = unsafeCoerceConstraint
 
     oneLT2 :: (2 ::<= b) C.:- (1 ::<= b)
     oneLT2 = unsafeCoerceConstraint
@@ -207,7 +198,7 @@ addLog lgAdd hn = case hn of
     intHasNonZeroD = unsafeCoerceConstraint
 
 addLeaves :: forall e (l :: Nat) b k a c lb res.
-             (Ord k, KnownNat b, KnownNat c, 1 ::<= b, lb ::<= c, 1 ::<= lb, lb ::<= b)
+             (Ord k, KnownNat b, KnownNat c, 1 ::<= b, lb ::<= c, lb ::<= b)
              => SNat lb -> (forall c'. (LeafC lb b c') => Leaves c' k a -> res l b k a)
              -> NodeLog e k a -> Leaves c k a -> Either (k, res l b k a) (SomeList (k, HNode 0 l b k a))
 addLeaves lb mkRes lg lvs =
@@ -225,7 +216,8 @@ addLeaves lb mkRes lg lvs =
                       \\ doubleLT b lc'
                       \\ stillLT lc'
        -- This is going to be true by construction, but have to prove it.
-       Right Refl -> Left (sameLevel lvs') \\ transitiveLT lb lc'
+       Right Refl -> Left (sameLevel lvs') \\ transitiveLT zero lb lc'
+                                           \\ zeroAlwaysLT lb
                                            \\ stillLT lc'
                                            \\ invGT ub lc'
 
@@ -254,11 +246,11 @@ addLeaves lb mkRes lg lvs =
 
     -- The type-checker needs some help
 
-    lbLTub :: (1 ::<= lb, lb ::<= b) C.:- (lb ::<= 2 :* b)
+    lbLTub :: (lb ::<= b) C.:- (lb ::<= 2 :* b)
     lbLTub = unsafeCoerceConstraint
 
     -- insertOrdAll can't decrease the number of values
-    stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
+    stillLT :: proxy c' -> (lb ::<= c) C.:- (1 ::<= c', lb ::<= c')
     stillLT _ = unsafeCoerceConstraint
 
 addInternal :: forall d l b k a lb lc e c res.
@@ -329,11 +321,11 @@ addInternal lb mkRes lgAdd lg chld
     mkNode :: forall c'. (KnownNat c', b ::<= c', c' ::<= (2:*b))
               => Children c' d l b k a -> (k, HNode (d+1) l b k a)
     mkNode chld' = (fst (head' chld'), HInt Nil chld') \\ zeroAlwaysLT l
-                                                       \\ transitiveLT b (SNat :: SNat c')
+                                                       \\ transitiveLT1 b (SNat :: SNat c')
 
     sameLevel :: forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' d l b k a
                  -> (k, res l b k a)
-    sameLevel newLg chld' = (fst (head' chld'), mkRes newLg chld') \\ transitiveLT lb (SNat :: SNat c')
+    sameLevel newLg chld' = (fst (head' chld'), mkRes newLg chld') \\ transitiveLT1 lb (SNat :: SNat c')
 
     -- insertOrdAll can't decrease the number of values
     stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
@@ -366,8 +358,11 @@ stillNatPlus _ _ = unsafeCoerceConstraint
 stillNatPred :: proxy n -> (KnownNat n, 1 ::<= n) C.:- (KnownNat (Pred n))
 stillNatPred _ = unsafeCoerceConstraint
 
-transitiveLT :: proxy a -> proxy b -> (1 ::<= a, a ::<= b) C.:- (1 ::<= b)
-transitiveLT _ _ = unsafeCoerceConstraint
+transitiveLT :: SNat a -> proxy b -> proxy c -> (a ::<= b, b ::<= c) C.:- (a ::<= c)
+transitiveLT _ _ _ = unsafeCoerceConstraint
+
+transitiveLT1 :: proxy a -> proxy b -> (1 ::<= a, a ::<= b) C.:- (1 ::<= b)
+transitiveLT1 = transitiveLT one
 
 invGT :: SNat a -> SNat b -> ((a :< b) ~ 'False) C.:- (b ::<= a)
 invGT _ _ = unsafeCoerceConstraint
