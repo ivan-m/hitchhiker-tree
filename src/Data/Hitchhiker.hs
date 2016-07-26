@@ -58,8 +58,8 @@ type Leaves   c       k a = List c (k, Log k a)
 
 deriving instance (Show k, Show a) => Show (HTree l b k a)
 
-type LeafC   lb b   c = (lb ::<= c, c ::<= (2:*b),                       KnownNat c)
-type IntC  l lb b e c = (lb ::<= c, c ::<= (2:*b), e ::<= l, KnownNat e, KnownNat c)
+type LeafC   lb b   c = (1 ::<= lb, lb ::<= c, c ::<= (2:*b),                       KnownNat c)
+type IntC  l lb b e c = (1 ::<= lb, lb ::<= c, c ::<= (2:*b), e ::<= l, KnownNat e, KnownNat c)
 
 one :: SNat 1
 one = SNat
@@ -96,14 +96,22 @@ type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
 
-addLog :: forall e d l b k a. (Ord k, KnownNat b, 1 ::<= b) => NodeLog e k a -> HNode d l b k a
+addLog :: forall e d l b k a. (Ord k, KnownNat b, KnownNat e, KnownNat l, 1 ::<= b)
+          => NodeLog e k a -> HNode d l b k a
           -> SomeList (k, HNode d l b k a)
-addLog lg hn = case hn of
-  HLeaf lvs -> addLeaves b HLeaf lg lvs
-
+addLog lgAdd hn = case hn of
+  HLeaf lvs     -> addLeaves b HLeaf lgAdd lvs
+  HInt  lg chld -> eitherSList (addInternal b HInt lgAdd lg chld)
+                   \\ intHasNonZeroD
   where
     b :: SNat b
     b = SNat
+
+    eitherSList :: Either v (SomeList v) -> SomeList v
+    eitherSList = either (`scons` nilList) id
+
+    intHasNonZeroD :: () C.:- (1 ::<= d)
+    intHasNonZeroD = unsafeCoerceConstraint
 
 addLeaves :: forall e (l :: Nat) b k a c lb res.
              (Ord k, KnownNat b, KnownNat c, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b)
@@ -166,13 +174,38 @@ addLeaves lb mkRes lg lvs =
     stillLT _ = unsafeCoerceConstraint
 
 addInternal :: forall d l b k a lb lc e c res.
-               (Ord k, KnownNat b, KnownNat c, KnownNat l, KnownNat lc, KnownNat e, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b, e ::<= l, 1 ::<= d)
-               => SNat lb -> (forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d-1) l b k a -> res l b k a)
-               -> NodeLog lc k a -> NodeLog e k a -> Children c (d-1) l b k a -> SomeList (k, res l b k a)
+               (Ord k, IntC l lb b e c, KnownNat b, KnownNat l, KnownNat lc, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b, e ::<= l, 1 ::<= d)
+               => SNat lb -> (forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d:-1) l b k a -> res l b k a)
+               -> NodeLog lc k a -> NodeLog e k a -> Children c (d:-1) l b k a
+               -> Either (k, res l b k a) (SomeList (k, HNode d l b k a))
 addInternal lb mkRes lgAdd lg chld
   = case trueOrFalse (l %:< e') of
-      Left Refl -> undefined
+      Left Refl -> case mkChildren chld of
+        SomeList c' chld' -> case trueOrFalse (ub %:< c') of
+          Left Refl ->
+            (case splitChildren c' chld' of
+              (rb,ql,q,r) -> Right (mkNode rb `scons` someList (fmap mkNode ql))
+                                   \\ halfLT b
+                                   \\ monotInc r
+                                   \\ stillNatPred q
+                                   \\ nonZeroQuot c' b
+                                   \\ stillNatPlus r b
+                                   \\ validQuotRem c' b
+            ) \\ doubleLT b c'
+          Right Refl -> Left (sameLevel Nil chld') \\ stillLT c'
+                                                   \\ invGT ub c'
+                                                   \\ zeroAlwaysLT l
+
+      Right Refl -> Left (sameLevel lg' chld) \\ invGT l e'
+                                              \\ hasLCE
+
   where
+    b :: SNat b
+    b = SNat
+
+    ub :: SNat (2:*b)
+    ub = two %:* b
+
     l :: SNat l
     l = SNat
 
@@ -191,11 +224,42 @@ addInternal lb mkRes lgAdd lg chld
                                      p :| ps' -> case partition (p . keyFor) stmts of
                                                    (pStmts, stmts') -> pStmts :| go ps' stmts'
 
-    chld' = concatS (zipWith addLogsTo lgBkts chld)
-
-    addLogsTo :: SomeList (Statement k a) -> (k,HNode (d-1) l b k a) -> SomeList (k, HNode (d-1) l b k a)
+    addLogsTo :: SomeList (Statement k a) -> (k,HNode (d:-1) l b k a) -> SomeList (k, HNode (d:-1) l b k a)
     addLogsTo (SomeList _ Nil) kn    = kn `scons` nilList
     addLogsTo (SomeList _ clg) (_,n) = addLog clg n
+
+    mkChildren = concatS . zipWith addLogsTo lgBkts
+
+    splitChildren :: (HasQuotRem c' b, b ::<= c')
+                     => SNat c' -> List c' v
+                     -> (List (Rem c' b + b) v
+                        , List (Quot c' b :- 1) (List b v)
+                        , SNat (Quot c' b)
+                        , SNat (Rem c' b))
+    splitChildren c' chld' = (case splitInto chld' of
+                                (r,lq) -> case uncons' lq of
+                                            (q,qs) -> (r++q, qs, SNat, SNat)
+                             ) \\ validQuotRem c' b
+                               \\ nonZeroQuot c' b
+
+    mkNode :: forall c'. (KnownNat c', b ::<= c', c' ::<= (2:*b))
+              => Children c' (d:-1) l b k a -> (k, HNode d l b k a)
+    mkNode chld' = (fst (head' chld'), HInt Nil chld') \\ zeroAlwaysLT l
+                                                       \\ transitiveLT b (SNat :: SNat c')
+
+    sameLevel :: forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d:-1) l b k a
+                 -> (k, res l b k a)
+    sameLevel newLg chld' = (fst (head' chld'), mkRes newLg chld') \\ transitiveLT lb (SNat :: SNat c')
+
+    halfLT :: proxy b -> () C.:- (b ::<= 2 :* b)
+    halfLT _ = unsafeCoerceConstraint
+
+    monotInc :: proxy r -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), (r+b) ::<= 2:*b)
+    monotInc _ = unsafeCoerceConstraint
+
+    -- insertOrdAll can't decrease the number of values
+    stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
+    stillLT _ = unsafeCoerceConstraint
 
 doubleLT :: SNat a -> SNat b -> ((2:*a :< b) ~ 'True) C.:- (a ::<= b)
 doubleLT _ _ = unsafeCoerceConstraint
@@ -216,3 +280,6 @@ trueOrFalse :: SBool b -> Either (b :~: 'True) (b :~: 'False)
 trueOrFalse b = case testEquality b STrue of
                   Just Refl -> Left Refl
                   Nothing   -> Right (unsafeCoerce Refl)
+
+zeroAlwaysLT :: proxy a -> () C.:- (0 ::<= a)
+zeroAlwaysLT _ = unsafeCoerceConstraint
