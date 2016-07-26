@@ -18,7 +18,7 @@ module Data.Hitchhiker where
 
 import Prelude hiding (head, zipWith, (++))
 
-import Data.List.Dependent
+import Data.List.Dependent hiding (map)
 
 -- Until the list module re-exports this
 import Data.List.Dependent.Numeric
@@ -33,7 +33,7 @@ import           Control.Applicative    (liftA2)
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
-import           GHC.Exts               (IsList (..))
+import qualified GHC.Exts               as L
 import           Unsafe.Coerce          (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -96,9 +96,22 @@ type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
 
-addStatements :: forall l b k a. (Ord k, KnownNat l, KnownNat b, 2 ::<= b)
+type Hitchhiker l b k = (Ord k, KnownNat l, KnownNat b, 2 ::<= b)
+
+fromList :: (Hitchhiker l b k) => [(k,a)] -> HTree l b k a
+fromList = (`addStatements` Empty) . map (uncurry Assert)
+
+insert :: (Hitchhiker l b k) => k -> a -> HTree l b k a -> HTree l b k a
+insert k a = addStatements [Assert k a]
+
+delete :: (Hitchhiker l b k) => k -> HTree l b k a -> HTree l b k a
+delete k = addStatements [Retract k]
+
+--------------------------------------------------------------------------------
+
+addStatements :: forall l b k a. (Hitchhiker l b k)
                  => [Statement k a] -> HTree l b k a -> HTree l b k a
-addStatements stmts = withSomeListN withDList (fromList stmts)
+addStatements stmts = withSomeListN withDList (L.fromList stmts)
   where
     b :: SNat b
     b = SNat
@@ -118,7 +131,7 @@ addStatements stmts = withSomeListN withDList (fromList stmts)
                                                     ht0 = Partial ((keyFor stmt, [stmt]) :| Nil) \\ doubleGT b
                                                                                                  \\ oneLT2
                                                 in withKnownNat n' (withDList n' lg' ht0)
-                               ) \\ nonZero n
+                               ) \\ nonZero n -- TODO: find a better implementation.
 
                Partial lvs  -> checkOverflow (addLeaves   one Partial lgAdd lvs)     \\ oneLT2
                Full lg chld -> checkOverflow (addInternal two Full    lgAdd lg chld) \\ oneLT2
