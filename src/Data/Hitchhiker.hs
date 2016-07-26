@@ -34,6 +34,7 @@ import           Data.Bifunctor         (second)
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
+import           GHC.Exts               (IsList (..))
 import           Unsafe.Coerce          (unsafeCoerce)
 
 --------------------------------------------------------------------------------
@@ -95,6 +96,23 @@ type Log k a = [Statement k a]
 type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
+
+addStatements :: forall l b k a. (Ord k, KnownNat l, KnownNat b, 1 ::<= b)
+                 => [Statement k a] -> HTree l b k a -> HTree l b k a
+addStatements stmts ht
+  = case fromList stmts of
+      SomeList _ Nil -> ht
+      SomeList _ lg  -> either snd handleOverflow
+                          (case ht of
+                             Empty -> addLeaves one Partial lg Nil -- TODO: how to define this?
+                          )
+
+
+  where
+    handleOverflow :: SomeList (k, HNode d l b k a) -> HTree l b k a
+    handleOverflow (SomeList c chld) = undefined
+      where
+
 
 addLog :: forall e d l b k a. (Ord k, KnownNat b, KnownNat e, KnownNat l, 1 ::<= b)
           => NodeLog e k a -> HNode d l b k a
