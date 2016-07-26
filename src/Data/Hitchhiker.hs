@@ -94,6 +94,9 @@ keyFor :: Statement k a -> k
 keyFor (Assert  k _) = k
 keyFor (Retract k)   = k
 
+toStatement :: k -> Maybe a -> Statement k a
+toStatement = liftA2 maybe Retract Assert
+
 valueFor :: Statement k a -> Maybe a
 valueFor stmt = case stmt of
                   Assert  _ a -> Just a
@@ -115,8 +118,29 @@ insert k a = addStatements [Assert k a]
 delete :: (Hitchhiker l b k) => k -> HTree l b k a -> HTree l b k a
 delete k = addStatements [Retract k]
 
+addStatement :: (Hitchhiker l b k) => Statement k a -> HTree l b k a -> HTree l b k a
+addStatement = addStatements . (:[])
+
 lookup :: (Hitchhiker l b k) => k -> HTree l b k a -> Maybe a
 lookup k ht = listToMaybe (lookupLogs k ht) >>= valueFor
+
+adjust :: (Hitchhiker l b k) => (a -> a) -> k -> HTree l b k a -> HTree l b k a
+adjust = adjustWithKey . const
+
+adjustWithKey :: (Hitchhiker l b k) => (k -> a -> a) -> k -> HTree l b k a -> HTree l b k a
+adjustWithKey f k ht = maybe id (insert k . f k) (lookup k ht) ht
+
+update :: (Hitchhiker l b k) => (a -> Maybe a) -> k
+          -> HTree l b k a -> HTree l b k a
+update = updateWithKey . const
+
+updateWithKey :: (Hitchhiker l b k) => (k -> a -> Maybe a) -> k
+                 -> HTree l b k a -> HTree l b k a
+updateWithKey f k ht = maybe id (addStatement . toStatement k . f k) (lookup k ht) ht
+
+alter :: (Hitchhiker l b k) => (Maybe a -> Maybe a) -> k
+         -> HTree l b k a -> HTree l b k a
+alter f k = (addStatement . toStatement k . f) =<< lookup k
 
 --------------------------------------------------------------------------------
 
