@@ -16,9 +16,10 @@
  -}
 module Data.Hitchhiker where
 
-import Prelude hiding (head, zipWith, (++))
+import           Prelude hiding (filter, head, lookup, zipWith, (++))
+import qualified Prelude as P
 
-import Data.List.Dependent hiding (map)
+import Data.List.Dependent hiding (lookup, map)
 
 -- Until the list module re-exports this
 import Data.List.Dependent.Numeric
@@ -33,6 +34,7 @@ import           Control.Applicative    (liftA2)
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
+import           Data.Maybe             (fromMaybe, listToMaybe)
 import qualified GHC.Exts               as L
 import           Unsafe.Coerce          (unsafeCoerce)
 
@@ -92,6 +94,11 @@ keyFor :: Statement k a -> k
 keyFor (Assert  k _) = k
 keyFor (Retract k)   = k
 
+valueFor :: Statement k a -> Maybe a
+valueFor stmt = case stmt of
+                  Assert  _ a -> Just a
+                  Retract _   -> Nothing
+
 type Log k a = [Statement k a]
 type NodeLog l k a = List l (Statement k a)
 
@@ -107,6 +114,9 @@ insert k a = addStatements [Assert k a]
 
 delete :: (Hitchhiker l b k) => k -> HTree l b k a -> HTree l b k a
 delete k = addStatements [Retract k]
+
+lookup :: (Hitchhiker l b k) => k -> HTree l b k a -> Maybe a
+lookup k ht = listToMaybe (lookupLogs k ht) >>= valueFor
 
 --------------------------------------------------------------------------------
 
@@ -377,3 +387,30 @@ zeroAlwaysLT _ = unsafeCoerceConstraint
 
 doubleGT :: proxy b -> (1 ::<= b) C.:- (1 ::<= 2 :* b)
 doubleGT _ = unsafeCoerceConstraint
+
+--------------------------------------------------------------------------------
+
+lookupLogs :: forall l b k a. (Hitchhiker l b k) => k -> HTree l b k a -> Log k a
+lookupLogs k ht = case ht of
+                    Partial lvs  -> fromLeaves lvs
+                    Full lg chld -> fromInt two lg chld
+  where
+    b :: SNat b
+    b = SNat
+
+    fromLeaves :: Leaves c k a -> Log k a
+    fromLeaves = fromMaybe [] . lookupOrd k
+
+    fromInt :: forall lb e c d. (IntC l lb b e c) => SNat lb -> NodeLog e k a -> Children c d l b k a -> Log k a
+    fromInt lb lg chld = let fromLg   = L.toList (filter ((k==) . keyFor) lg)
+                             fromChld = fromNode (lookupOrdRange k chld) \\ transitiveLT1 lb (lengthNat chld)
+                                                                         \\ oneLT2
+                         in fromLg P.++ fromChld
+
+    fromNode :: HNode d l b k a -> Log k a
+    fromNode hn = case hn of
+                    HLeaf lvs    -> fromLeaves lvs
+                    HInt lg chld -> fromInt b lg chld
+
+    oneLT2 :: (2 ::<= b) C.:- (1 ::<= b)
+    oneLT2 = unsafeCoerceConstraint

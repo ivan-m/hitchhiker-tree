@@ -543,7 +543,15 @@ lookup k0 = go
 
 -- TODO: find
 
--- TODO: filter
+filter :: forall n a. (a -> Bool) -> List n a -> SomeList a
+filter p = go
+  where
+    go :: List n' a -> SomeList a
+    go as = case as of
+              Nil -> nilList
+              a :| as'
+                | p a       -> a `scons` go as'
+                | otherwise -> go as'
 
 partition :: (a -> Bool) -> List n a -> (SomeList a, SomeList a)
 partition p = foldr select (nilList, nilList)
@@ -663,8 +671,8 @@ ordBuckets lst = case lst of
 
 -- | Merging function is @f new old@.  Key-getting function assumed to
 --   be O(1).
-insertOrd:: forall n a k. (Ord k) => (a -> a -> a) -> k -> a
-            -> List n (k,a) -> Either (List n (k,a)) (List (n+1) (k,a))
+insertOrd :: forall n a k. (Ord k) => (a -> a -> a) -> k -> a
+             -> List n (k,a) -> Either (List n (k,a)) (List (n+1) (k,a))
 insertOrd mrg k0 v = go
   where
     go :: List n' (k,a) -> Either (List n' (k,a)) (List (n'+1) (k,a))
@@ -699,6 +707,18 @@ lookupOrd v = go
                                   LT -> go kas'
                                   EQ -> Just a
                                   GT -> Nothing
+
+lookupOrdRange :: forall n a k. (Ord k, 1 ::<= n) => k -> List n (k,a) -> a
+lookupOrdRange k0 lst = case lst of
+                          (_,a) :| kas -> go a kas
+  where
+    go :: a -> List n' (k,a) -> a
+    go a kas = case kas of
+                 Nil            -> a
+                 (k,a') :| kas' -> case compare k0 k of
+                                     LT -> a
+                                     EQ -> a'
+                                     _  -> go a' kas'
 
 -- | For a given key @k@ and indexed list, finds the first @a_i@ where
 --   @k_i <= k < k_{i+1}@ (or @k_0@ if @k < k_0@).
