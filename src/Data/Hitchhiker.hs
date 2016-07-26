@@ -100,7 +100,7 @@ addLog :: forall e d l b k a. (Ord k, KnownNat b, KnownNat e, KnownNat l, 1 ::<=
           => NodeLog e k a -> HNode d l b k a
           -> SomeList (k, HNode d l b k a)
 addLog lgAdd hn = case hn of
-  HLeaf lvs     -> addLeaves b HLeaf lgAdd lvs
+  HLeaf lvs     -> eitherSList (addLeaves b HLeaf lgAdd lvs)
   HInt  lg chld -> eitherSList (addInternal b HInt lgAdd lg chld)
                    \\ intHasNonZeroD
   where
@@ -116,24 +116,25 @@ addLog lgAdd hn = case hn of
 addLeaves :: forall e (l :: Nat) b k a c lb res.
              (Ord k, KnownNat b, KnownNat c, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b)
              => SNat lb -> (forall c'. (LeafC lb b c') => Leaves c' k a -> res l b k a)
-             -> NodeLog e k a -> Leaves c k a -> SomeList (k, res l b k a)
+             -> NodeLog e k a -> Leaves c k a -> Either (k, res l b k a) (SomeList (k, HNode 0 l b k a))
 addLeaves lb mkRes lg lvs =
   case insertOrdAll mappend (fromLog lg) lvs of
      SomeList lc' lvs' -> case trueOrFalse (ub %:<  lc') of
        Left Refl -> (case splitNode lc' lvs'  of
-         (rb,ql,q,r) -> (mkLeaf rb `scons` someList (fmap mkLeaf ql))
-                        \\ stillNatPlus r lb
-                        \\ stillNatPred q
-                        \\ nonZeroQuot lc' lb
-                        \\ monotInc r
-                        \\ validQuotRem lc' lb
-                        \\ lbLTub)
+         (rb,ql,q,r) -> Right (mkLeaf rb `scons` someList (fmap mkLeaf ql))
+                              \\ halfLT b
+                              \\ stillNatPlus r b
+                              \\ stillNatPred q
+                              \\ nonZeroQuot lc' b
+                              \\ monotInc r
+                              \\ validQuotRem lc' b
+                              \\ lbLTub)
                       \\ doubleLT b lc'
                       \\ stillLT lc'
        -- This is going to be true by construction, but have to prove it.
-       Right Refl -> scons (mkLeaf lvs') nilList \\ transitiveLT lb lc'
-                                                 \\ stillLT lc'
-                                                 \\ invGT ub lc'
+       Right Refl -> Left (sameLevel lvs') \\ transitiveLT lb lc'
+                                           \\ stillLT lc'
+                                           \\ invGT ub lc'
 
   where
     b :: SNat b
@@ -147,18 +148,21 @@ addLeaves lb mkRes lg lvs =
 
     -- Because r < b, r+b < 2b, thus upper bound is not violated.  We
     -- just need to tell GHC that.
-    splitNode :: (HasQuotRem c' lb, lb ::<= c')
+    splitNode :: (HasQuotRem c' b, b ::<= c')
                  => SNat c' -> List c' v
-                 -> (List (Rem c' lb + lb) v, List (Quot c' lb :- 1) (List lb v), SNat (Quot c' lb), SNat (Rem c' lb))
+                 -> (List (Rem c' b + b) v, List (Quot c' b :- 1) (List b v), SNat (Quot c' b), SNat (Rem c' b))
     splitNode c' ls = (case splitInto ls of
                          (r, lq) -> case uncons' lq of
                                       (l, q) -> (r ++ l, q, SNat, SNat)
-                      ) \\ nonZeroQuot c' lb -- Avoid complaining about missing case
-                        \\ validQuotRem c' lb
-                        \\ transitiveLT lb b
+                      ) \\ nonZeroQuot c' b -- Avoid complaining about missing case
+                        \\ validQuotRem c' b
+                        \\ transitiveLT b b
 
-    mkLeaf :: (KnownNat c', lb ::<= c', 1 ::<= c', c' ::<= (2:*b)) => Leaves c' k a -> (k, res l b k a)
-    mkLeaf lvs' = (fst (head' lvs'), mkRes lvs')
+    mkLeaf :: (KnownNat c', b ::<= c', 1 ::<= c', c' ::<= (2:*b)) => Leaves c' k a -> (k, HNode 0 l b k a)
+    mkLeaf lvs' = (fst (head' lvs'), HLeaf lvs')
+
+    sameLevel :: (KnownNat c', lb ::<= c', 1 ::<= c', c' ::<= (2:*b)) => Leaves c' k a -> (k, res l b k a)
+    sameLevel lvs' = (fst (head' lvs'), mkRes lvs')
 
     -- The type-checker needs some help
 
@@ -166,7 +170,7 @@ addLeaves lb mkRes lg lvs =
     lbLTub = unsafeCoerceConstraint
 
     -- 1 <= lb, 0 <= r, lb <= b
-    monotInc :: proxy r -> ((r :< lb) ~ 'True) C.:- (lb ::<= (r + lb), 1 ::<= (r+lb), (r+lb) ::<= 2:*b)
+    monotInc :: proxy r -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), 1 ::<= (r+b), (r+b) ::<= 2:*b)
     monotInc _ = unsafeCoerceConstraint
 
     -- insertOrdAll can't decrease the number of values
@@ -251,15 +255,15 @@ addInternal lb mkRes lgAdd lg chld
                  -> (k, res l b k a)
     sameLevel newLg chld' = (fst (head' chld'), mkRes newLg chld') \\ transitiveLT lb (SNat :: SNat c')
 
-    halfLT :: proxy b -> () C.:- (b ::<= 2 :* b)
-    halfLT _ = unsafeCoerceConstraint
-
     monotInc :: proxy r -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), (r+b) ::<= 2:*b)
     monotInc _ = unsafeCoerceConstraint
 
     -- insertOrdAll can't decrease the number of values
     stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
     stillLT _ = unsafeCoerceConstraint
+
+halfLT :: proxy b -> () C.:- (b ::<= 2 :* b)
+halfLT _ = unsafeCoerceConstraint
 
 doubleLT :: SNat a -> SNat b -> ((2:*a :< b) ~ 'True) C.:- (a ::<= b)
 doubleLT _ _ = unsafeCoerceConstraint
