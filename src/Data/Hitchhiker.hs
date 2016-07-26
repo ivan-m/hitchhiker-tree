@@ -30,7 +30,6 @@ import Data.Type.Equality
 import GHC.TypeLits
 
 import           Control.Applicative    (liftA2)
-import           Data.Bifunctor         (second)
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
@@ -97,22 +96,85 @@ type NodeLog l k a = List l (Statement k a)
 
 --------------------------------------------------------------------------------
 
-addStatements :: forall l b k a. (Ord k, KnownNat l, KnownNat b, 1 ::<= b)
+addStatements :: forall l b k a. (Ord k, KnownNat l, KnownNat b, 2 ::<= b)
                  => [Statement k a] -> HTree l b k a -> HTree l b k a
-addStatements stmts ht
-  = case fromList stmts of
-      SomeList _ Nil -> ht
-      SomeList _ lg  -> either snd handleOverflow
-                          (case ht of
-                             Empty -> addLeaves one Partial lg Nil -- TODO: how to define this?
-                          )
-
-
+addStatements stmts = withSomeListN withDList (fromList stmts)
   where
-    handleOverflow :: SomeList (k, HNode d l b k a) -> HTree l b k a
-    handleOverflow (SomeList c chld) = undefined
-      where
+    b :: SNat b
+    b = SNat
 
+    ub :: SNat (2:*b)
+    ub = two %:* b
+
+    l :: SNat l
+    l = SNat
+
+    withDList :: (KnownNat n) => SNat n -> NodeLog n k a -> HTree l b k a -> HTree l b k a
+    withDList n lgAdd ht = case lgAdd of
+      Nil -> ht
+      _   -> case ht of
+               Empty        -> (case unsnoc lgAdd of
+                                  (lg',stmt) -> let n'  = sPred n
+                                                    ht0 = Partial ((keyFor stmt, [stmt]) :| Nil) \\ doubleGT b
+                                                                                                 \\ oneLT2
+                                                in withKnownNat n' (withDList n' lg' ht0)
+                               ) \\ nonZero n
+
+               Partial lvs  -> checkOverflow (addLeaves   one Partial lgAdd lvs)     \\ oneLT2
+               Full lg chld -> checkOverflow (addInternal two Full    lgAdd lg chld) \\ oneLT2
+
+    checkOverflow :: Either (k,HTree l b k a) (SomeList (k, HNode d l b k a)) -> HTree l b k a
+    checkOverflow = either snd handleOverflow
+
+    handleOverflow :: forall d. SomeList (k, HNode d l b k a) -> HTree l b k a
+    handleOverflow = withSomeListN go
+     where
+       go :: forall c d'. (KnownNat c) => SNat c -> List c (k, HNode d' l b k a) -> HTree l b k a
+       go c chld = case trueOrFalse (ub %:< c) of
+                     Left  Refl -> (case splitB c chld of
+                                      (rb,bs,q,r) -> go q (joinChildren r rb bs) \\ monotInc r b
+                                                                                 \\ oneLT2
+                                                                                 \\ validQuotRem c b
+                                                                                 \\ nonZeroQuot c b
+                                   ) \\ willBeGTb c
+                     Right Refl -> Full Nil chld \\ willBeGT2 c
+                                                 \\ zeroAlwaysLT l
+                                                 \\ invGT ub c
+    splitB :: (HasQuotRem c b, b ::<= c)
+              => SNat c -> List c v
+              -> (List (Rem c b + b) v
+                 , List (Quot c b :- 1) (List b v)
+                 , SNat (Quot c b)
+                 , SNat (Rem c b))
+    splitB = splitIntoMinSize b \\ oneLT2
+
+    joinChildren :: (KnownNat r, (r :< b) ~ 'True) => SNat r
+                    -> List (r+b) (k,HNode d l b k a)
+                    -> List (q:-1) (List b (k, HNode d l b k a))
+                    -> List q (k, HNode (d+1) l b k a)
+    joinChildren r br bs = mkNode br :| fmap mkNode bs \\ monotInc r b
+                                                       \\ oneLT2
+                                                       \\ halfLT b
+                                                       \\ stillNatPlus r b
+
+    mkNode :: forall c d. (KnownNat c, b ::<= c, c ::<= (2:*b))
+              => Children c d l b k a -> (k, HNode (d+1) l b k a)
+    mkNode chld = (fst (head' chld), HInt Nil chld) \\ zeroAlwaysLT l
+                                                    \\ transitiveLT b (SNat :: SNat c)
+                                                    \\ oneLT2
+
+    -- Because it should really work this out for itself.
+    nonZero :: proxy n -> () C.:- (1 ::<= n)
+    nonZero _ = unsafeCoerceConstraint
+
+    oneLT2 :: (2 ::<= b) C.:- (1 ::<= b)
+    oneLT2 = unsafeCoerceConstraint
+
+    willBeGT2 :: proxy c -> () C.:- (2 ::<= c)
+    willBeGT2 _ = unsafeCoerceConstraint
+
+    willBeGTb :: proxy c -> () C.:- (b ::<= c)
+    willBeGTb _ = unsafeCoerceConstraint
 
 addLog :: forall e d l b k a. (Ord k, KnownNat b, KnownNat e, KnownNat l, 1 ::<= b)
           => NodeLog e k a -> HNode d l b k a
@@ -132,7 +194,7 @@ addLog lgAdd hn = case hn of
     intHasNonZeroD = unsafeCoerceConstraint
 
 addLeaves :: forall e (l :: Nat) b k a c lb res.
-             (Ord k, KnownNat b, KnownNat c, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b)
+             (Ord k, KnownNat b, KnownNat c, 1 ::<= b, lb ::<= c, 1 ::<= lb, lb ::<= b)
              => SNat lb -> (forall c'. (LeafC lb b c') => Leaves c' k a -> res l b k a)
              -> NodeLog e k a -> Leaves c k a -> Either (k, res l b k a) (SomeList (k, HNode 0 l b k a))
 addLeaves lb mkRes lg lvs =
@@ -144,7 +206,7 @@ addLeaves lb mkRes lg lvs =
                               \\ stillNatPlus r b
                               \\ stillNatPred q
                               \\ nonZeroQuot lc' b
-                              \\ monotInc r
+                              \\ monotInc r b
                               \\ validQuotRem lc' b
                               \\ lbLTub)
                       \\ doubleLT b lc'
@@ -169,12 +231,7 @@ addLeaves lb mkRes lg lvs =
     splitNode :: (HasQuotRem c' b, b ::<= c')
                  => SNat c' -> List c' v
                  -> (List (Rem c' b + b) v, List (Quot c' b :- 1) (List b v), SNat (Quot c' b), SNat (Rem c' b))
-    splitNode c' ls = (case splitInto ls of
-                         (r, lq) -> case uncons' lq of
-                                      (l, q) -> (r ++ l, q, SNat, SNat)
-                      ) \\ nonZeroQuot c' b -- Avoid complaining about missing case
-                        \\ validQuotRem c' b
-                        \\ transitiveLT b b
+    splitNode = splitIntoMinSize b
 
     mkLeaf :: (KnownNat c', b ::<= c', 1 ::<= c', c' ::<= (2:*b)) => Leaves c' k a -> (k, HNode 0 l b k a)
     mkLeaf lvs' = (fst (head' lvs'), HLeaf lvs')
@@ -187,19 +244,15 @@ addLeaves lb mkRes lg lvs =
     lbLTub :: (1 ::<= lb, lb ::<= b) C.:- (lb ::<= 2 :* b)
     lbLTub = unsafeCoerceConstraint
 
-    -- 1 <= lb, 0 <= r, lb <= b
-    monotInc :: proxy r -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), 1 ::<= (r+b), (r+b) ::<= 2:*b)
-    monotInc _ = unsafeCoerceConstraint
-
     -- insertOrdAll can't decrease the number of values
     stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
     stillLT _ = unsafeCoerceConstraint
 
 addInternal :: forall d l b k a lb lc e c res.
-               (Ord k, IntC l lb b e c, KnownNat b, KnownNat l, KnownNat lc, 1 ::<= b, KnownNat lb, lb ::<= c, 1 ::<= lb, lb ::<= b, e ::<= l, 1 ::<= d)
-               => SNat lb -> (forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d:-1) l b k a -> res l b k a)
-               -> NodeLog lc k a -> NodeLog e k a -> Children c (d:-1) l b k a
-               -> Either (k, res l b k a) (SomeList (k, HNode d l b k a))
+               (Ord k, IntC l lb b e c, KnownNat b, KnownNat l, KnownNat lc, 1 ::<= b)
+               => SNat lb -> (forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' d l b k a -> res l b k a)
+               -> NodeLog lc k a -> NodeLog e k a -> Children c d l b k a
+               -> Either (k, res l b k a) (SomeList (k, HNode (d+1) l b k a))
 addInternal lb mkRes lgAdd lg chld
   = case trueOrFalse (l %:< e') of
       Left Refl -> case mkChildren chld of
@@ -208,7 +261,7 @@ addInternal lb mkRes lgAdd lg chld
             (case splitChildren c' chld' of
               (rb,ql,q,r) -> Right (mkNode rb `scons` someList (fmap mkNode ql))
                                    \\ halfLT b
-                                   \\ monotInc r
+                                   \\ monotInc r b
                                    \\ stillNatPred q
                                    \\ nonZeroQuot c' b
                                    \\ stillNatPlus r b
@@ -246,7 +299,7 @@ addInternal lb mkRes lgAdd lg chld
                                      p :| ps' -> case partition (p . keyFor) stmts of
                                                    (pStmts, stmts') -> pStmts :| go ps' stmts'
 
-    addLogsTo :: SomeList (Statement k a) -> (k,HNode (d:-1) l b k a) -> SomeList (k, HNode (d:-1) l b k a)
+    addLogsTo :: SomeList (Statement k a) -> (k,HNode d l b k a) -> SomeList (k, HNode d l b k a)
     addLogsTo (SomeList _ Nil) kn    = kn `scons` nilList
     addLogsTo (SomeList _ clg) (_,n) = addLog clg n
 
@@ -258,27 +311,35 @@ addInternal lb mkRes lgAdd lg chld
                         , List (Quot c' b :- 1) (List b v)
                         , SNat (Quot c' b)
                         , SNat (Rem c' b))
-    splitChildren c' chld' = (case splitInto chld' of
-                                (r,lq) -> case uncons' lq of
-                                            (q,qs) -> (r++q, qs, SNat, SNat)
-                             ) \\ validQuotRem c' b
-                               \\ nonZeroQuot c' b
+    splitChildren = splitIntoMinSize b
 
     mkNode :: forall c'. (KnownNat c', b ::<= c', c' ::<= (2:*b))
-              => Children c' (d:-1) l b k a -> (k, HNode d l b k a)
+              => Children c' d l b k a -> (k, HNode (d+1) l b k a)
     mkNode chld' = (fst (head' chld'), HInt Nil chld') \\ zeroAlwaysLT l
                                                        \\ transitiveLT b (SNat :: SNat c')
 
-    sameLevel :: forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' (d:-1) l b k a
+    sameLevel :: forall e' c'. (IntC l lb b e' c') => NodeLog e' k a -> Children c' d l b k a
                  -> (k, res l b k a)
     sameLevel newLg chld' = (fst (head' chld'), mkRes newLg chld') \\ transitiveLT lb (SNat :: SNat c')
-
-    monotInc :: proxy r -> ((r :< b) ~ 'True) C.:- (b ::<= (r + b), (r+b) ::<= 2:*b)
-    monotInc _ = unsafeCoerceConstraint
 
     -- insertOrdAll can't decrease the number of values
     stillLT :: proxy c' -> (lb ::<= c) C.:- (lb ::<= c')
     stillLT _ = unsafeCoerceConstraint
+
+splitIntoMinSize :: (HasQuotRem n d, 1 ::<= d, d ::<= n) => SNat d -> SNat n -> List n v
+                    -> ( List (Rem n d + d) v
+                       , List (Quot n d :- 1) (List d v)
+                       , SNat (Quot n d)
+                       , SNat (Rem n d)
+                       )
+splitIntoMinSize d n ls = (case splitInto ls of
+                             (r,lq) -> case uncons' lq of
+                                         (q, qs) -> (r++q, qs, SNat, SNat)
+                          ) \\ nonZeroQuot n d
+                            \\ validQuotRem n d
+
+monotInc :: proxy r -> proxy b -> (1 ::<= b, (r :< b) ~ 'True) C.:- (1 ::<= (r+b),  b ::<= (r + b), (r+b) ::<= 2:*b)
+monotInc _ _ = unsafeCoerceConstraint
 
 halfLT :: proxy b -> () C.:- (b ::<= 2 :* b)
 halfLT _ = unsafeCoerceConstraint
@@ -305,3 +366,6 @@ trueOrFalse b = case testEquality b STrue of
 
 zeroAlwaysLT :: proxy a -> () C.:- (0 ::<= a)
 zeroAlwaysLT _ = unsafeCoerceConstraint
+
+doubleGT :: proxy b -> (1 ::<= b) C.:- (1 ::<= 2 :* b)
+doubleGT _ = unsafeCoerceConstraint

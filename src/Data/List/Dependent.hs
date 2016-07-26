@@ -3,7 +3,7 @@
              StandaloneDeriving, TypeFamilies, TypeOperators #-}
 
 {-# OPTIONS_GHC -fplugin GHC.TypeLits.Normalise #-}
-
+{-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 {- |
    Module      : Data.List.Dependent
@@ -205,6 +205,14 @@ uncons as = case as of
 
 uncons' :: (1 ::<= n) => List n a -> (a, List (n:-1) a)
 uncons' (a :| as) = (a, as)
+
+unsnoc :: forall n a. (1 ::<= n) => List n a -> (List (n:-1) a, a)
+unsnoc = go
+  where
+    go :: forall n'. List (n'+1) a -> (List n' a, a)
+    go as = case as of
+              a :| Nil -> (Nil, a)
+              a :| as' -> first (a:|) (go as')
 
 scons :: a -> SomeList a -> SomeList a
 scons a sl = case sl of
