@@ -19,7 +19,6 @@ module Data.List.Dependent.Numeric where
 import Data.Singletons.Prelude
 import GHC.TypeLits
 
-import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
 
