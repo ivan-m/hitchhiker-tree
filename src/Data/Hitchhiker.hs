@@ -31,6 +31,7 @@ import Data.Type.Equality
 import GHC.TypeLits
 
 import           Control.Applicative    (liftA2)
+import           Control.DeepSeq        (NFData (..))
 import           Data.Constraint        hiding ((:-))
 import qualified Data.Constraint        as C
 import           Data.Constraint.Unsafe (unsafeCoerceConstraint)
@@ -52,14 +53,18 @@ data HTree l b k a where
   Full    :: forall c e d l b k a. (IntC l 2 b e c)
              => NodeLog e k a -> Children c d l b k a -> HTree l b k a
 
+deriving instance (Show k, Show a) => Show (HTree l b k a)
+
+instance (NFData k, NFData a) => NFData (HTree l b k a) where
+  rnf (Partial lvs)  = rnf lvs
+  rnf (Full lg chld) = rnf lg `seq` rnf chld
+
 empty :: forall l b k a. (Hitchhiker l b k) => HTree l b k a
 empty = Partial Nil \\ zeroAlwaysLT (two %:* (SNat :: SNat b))
 
 -- c == number of children.
 type Children c d l b k a = List c (k, HNode d l b k a)
 type Leaves   c       k a = List c (k, Log k a)
-
-deriving instance (Show k, Show a) => Show (HTree l b k a)
 
 type LeafC   lb b   c = (           lb ::<= c, c ::<= (2:*b),                       KnownNat c)
 type IntC  l lb b e c = (1 ::<= lb, lb ::<= c, c ::<= (2:*b), e ::<= l, KnownNat e, KnownNat c)
@@ -83,12 +88,20 @@ data HNode (d :: Nat) (l :: Nat) (b :: Nat) k a where
 
 deriving instance (Show k, Show a) => Show (HNode d l b k a)
 
+instance (NFData k, NFData a) => NFData (HNode d l b k a) where
+  rnf (HLeaf lvs)    = rnf lvs
+  rnf (HInt lg chld) = rnf lg `seq` rnf chld
+
 --------------------------------------------------------------------------------
 
 -- | Specify a change in value @a@ for a particular key @k@.
-data Statement k a = Assert k a
+data Statement k a = Assert  k a
                    | Retract k
   deriving (Eq, Ord, Show, Read)
+
+instance (NFData k, NFData a) => NFData (Statement k a) where
+  rnf (Assert  k a) = rnf k `seq` rnf a
+  rnf (Retract k)   = rnf k
 
 keyFor :: Statement k a -> k
 keyFor (Assert  k _) = k

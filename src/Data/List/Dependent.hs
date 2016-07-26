@@ -40,6 +40,7 @@ import Data.Singletons.TypeLits
 import Data.Type.Equality
 import GHC.TypeLits
 
+import Control.DeepSeq (NFData (..))
 import           Control.Applicative             (liftA2)
 import           Data.Bifunctor                  (bimap, first, second)
 import           Data.Bool
@@ -65,6 +66,10 @@ deriving instance (Eq a) => Eq (List n a)
 deriving instance (Ord a) => Ord (List n a)
 deriving instance (Show a) => Show (List n a)
 deriving instance Functor (List n)
+
+instance (NFData a) => NFData (List n a) where
+  rnf Nil       = ()
+  rnf (a :| as) = rnf a `seq` rnf as
 
 instance (Read a, KnownNat n) => Read (List n a) where
   readPrec = go sing
@@ -150,6 +155,9 @@ instance IsList (SomeList a) where
   fromList = P.foldr scons nilList
 
   toList = unfoldr unscons
+
+instance (NFData a) => NFData (SomeList a) where
+  rnf = withSomeList rnf
 
 --------------------------------------------------------------------------------
 -- Defining functions in the order of Data.List

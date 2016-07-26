@@ -22,6 +22,7 @@ library
   -- other-extensions:
   build-depends:       base >=4.9 && <4.10
                      , constraints == 0.8.*
+                     , deepseq == 1.4.*
                      , ghc-typelits-natnormalise
                      , reflection == 2.1.*
                      , singletons == 2.2.*
